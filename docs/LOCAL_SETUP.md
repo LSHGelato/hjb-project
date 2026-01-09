@@ -271,11 +271,25 @@ Verify subfolders exist:
 
 If missing, create them manually.
 
-### 10.2 OrionMega (if applicable)
+### 10.2 OrionMega (NVMe scratch)
 
-Scratch path:
-- [ ] Not configured initially (acceptable)
-- [ ] If later configured, record path here: ________________________________
+Expected root:
+
+```
+C:\Scratch\NVMe\
+```
+
+Verify subfolders exist:
+
+- [ ] `_tmp`
+- [ ] `_cache`
+- [ ] `_staging`
+- [ ] `_working`
+- [ ] `_spool`
+- [ ] `_logs`
+- [ ] `_quarantine`
+
+If missing, create them manually.
 
 ---
 
