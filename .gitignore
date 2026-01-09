@@ -1,14 +1,89 @@
-# Secrets
+###############################################################################
+# HJB Project – Git Ignore Rules
+# Purpose: Prevent accidental commits of data, secrets, logs, and local state
+###############################################################################
+
+# ---------------------------------------------------------------------------
+# Secrets & local configuration (NEVER COMMIT)
+# ---------------------------------------------------------------------------
 config.yaml
+config/*.local.yaml
 *.env
+.env.*
 
-# Python
+# ---------------------------------------------------------------------------
+# Python runtime artifacts
+# ---------------------------------------------------------------------------
 __pycache__/
-*.pyc
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
 
-# Logs
+# Virtual environments
+.venv/
+venv/
+env/
+
+# ---------------------------------------------------------------------------
+# Logs, temp files, and runtime state
+# ---------------------------------------------------------------------------
 *.log
+logs/
+tmp/
+temp/
+.cache/
 
-# OS
+# Watcher / pipeline state that should never be versioned
+watcher_heartbeat*.json
+pipeline_state.json
+
+# ---------------------------------------------------------------------------
+# Data artifacts (explicitly excluded by project design)
+# ---------------------------------------------------------------------------
+# Raw / Working / Reference / Published layers must NEVER be committed
+01_Research/
+02_Projects/
+05_Reference/
+Raw/
+Working/
+Reference/
+Published/
+
+# OCR outputs, scans, images, PDFs
+*.jp2
+*.djvu
+*.pdf
+*.tif
+*.tiff
+*.png
+*.jpg
+*.jpeg
+*.zip
+*.hocr
+*.xml
+*.jsonl
+
+# ---------------------------------------------------------------------------
+# Database artifacts
+# ---------------------------------------------------------------------------
+*.sql.bak
+*.dump
+*.db
+*.sqlite
+*.sqlite3
+
+# ---------------------------------------------------------------------------
+# OS / editor noise
+# ---------------------------------------------------------------------------
 .DS_Store
 Thumbs.db
+desktop.ini
+*.swp
+*.swo
+*.bak
+*.orig
+
+# VS Code
+.vscode/
