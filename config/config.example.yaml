@@ -22,9 +22,9 @@ paths:
   logs_root: "\\\\RaneyHQ\\Michael\\02_Projects\\Historical_Journals_Pipeline\\0200_STATE\\logs"
   scheduled_root: "\\\\RaneyHQ\\Michael\\02_Projects\\Historical_Journals_Pipeline\\0200_STATE\\scheduled"
 
-  # Optional: local scratch (recommended for temp / high-IO work)
-  # On OrionMX, set this to your NVMe scratch disk (per your standard).
-  scratch_root: "C:\\Scratch\\NVMe"
+# Optional: local scratch (recommended for temp / high-IO work)
+# On OrionMX, set this to your NVMe scratch disk (per your standard).
+scratch_root: "C:\\Scratch\\NVMe"
 
 watcher:
   mode: "continuous"              # continuous | opportunistic
