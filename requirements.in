@@ -1,0 +1,14 @@
+# HJB top-level Python dependencies
+# This file is intentionally short and human-maintained.
+# Add entries only when the code explicitly requires them.
+
+# Configuration & utilities
+pyyaml
+python-dateutil
+tqdm
+
+# Networking / APIs
+requests
+
+# Parsing / XML / HTML (needed later for IA metadata, MediaWiki)
+lxml
