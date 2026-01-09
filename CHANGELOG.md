@@ -10,7 +10,12 @@ and adheres to **Semantic Versioning** (https://semver.org/).
 
 ## [Unreleased]
 
+## [Unreleased]
+
 ### Added
+- Standardized Python runtime on Python 3.12 with project-local virtual environments
+- Introduced `requirements.in` and pinned `requirements.txt` for reproducible dependency installs
+- Documented venv and dependency management strategy
 - Initial GitHub repository structure aligned with Blueprint v2.4
 - Baseline documentation (README.md)
 - Configuration template (`config/config.example.yaml`)
@@ -18,13 +23,7 @@ and adheres to **Semantic Versioning** (https://semver.org/).
 - Changelog scaffolding
 
 ### Changed
-- None
-
-### Fixed
-- None
-
-### Removed
-- None
+- Clarified local setup expectations to require venv-based execution for watchers
 
 ---
 
