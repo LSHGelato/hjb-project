@@ -33,6 +33,9 @@ HJB spans five components:
 Data flows through the four-layer model:
 **Raw → Working → Reference → Published**.
 
+## Documentation
+Start with `docs/README.md` for setup and operational guidance.
+
 ## Repository layout
 ```
 hjb-project/
