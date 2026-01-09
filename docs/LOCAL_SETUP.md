@@ -4,7 +4,7 @@ This document is a **one-time machine initialization checklist** for preparing
 OrionMX and OrionMega to run the Historical Journals & Books (HJB) pipeline.
 
 It is intended to be followed **in order**, with boxes checked explicitly.
-It complements `DEPLOYMENT.md` and `CONFIG_DECISIONS.md`.
+It complements `DEPLOYMENT.md`, `CONFIG_DECISIONS.md`, and `VENV_AND_DEPENDENCIES.md`.
 
 ---
 
@@ -14,6 +14,7 @@ This checklist prepares a machine to:
 
 - Run HJB watcher processes safely
 - Access the NAS workflow hub (RaneyHQ)
+- Use Python **3.12** inside a project virtual environment (venv)
 - Consume secrets via **system-level environment variables**
 - Support Success v0 (watcher + heartbeat + no-op task)
 
@@ -26,7 +27,24 @@ Those steps are deferred intentionally.
 
 ---
 
-## 2. Machine Identification
+## 2. Practical Clean Standardization (Recommended)
+
+Windows machines often accumulate multiple Python installs over time. For HJB, you do **not** need
+a perfect purge of old versions to achieve a clean, unmistakable runtime.
+
+**HJB standard** is “practical clean”:
+- Ensure **Python 3.12.x** is installed and available via the Python Launcher (`py`)
+- Create a **project-local venv** at `C:\hjb-project\.venv\`
+- Run HJB only via the venv interpreter (`.venv\Scripts\python.exe`)
+- Ignore legacy global packages and older interpreters unless they interfere
+
+**Do not uninstall anything** until you have first verified what is in use (see §5.3).
+
+A full purge of older Pythons is optional and can be done later if you still want it.
+
+---
+
+## 3. Machine Identification
 
 Complete this section before proceeding.
 
@@ -40,7 +58,7 @@ Complete this section before proceeding.
 
 ---
 
-## 3. Operating System Prerequisites
+## 4. Operating System Prerequisites
 
 - [ ] Windows fully booted and stable
 - [ ] Local administrator access available
@@ -48,11 +66,60 @@ Complete this section before proceeding.
 
 ---
 
-## 4. Git Installation
+## 5. Python 3.12 Installation (Required)
 
-### 4.1 Verify Git availability
+### 5.1 Verify Python 3.12 is available
 
 Open PowerShell and run:
+
+```powershell
+py -3.12 --version
+```
+
+Expected:
+- `Python 3.12.x`
+
+If this fails:
+- Install Python 3.12 (official Windows installer from python.org)
+- Ensure the **Python Launcher** is installed
+- Reboot if required
+
+### 5.2 Confirm launcher list (optional but useful)
+
+Run:
+
+```powershell
+py -0p
+```
+
+Expected:
+- A Python 3.12 interpreter path is listed
+
+Record here:
+- __________________________________________
+
+### 5.3 Inventory check (practical clean guardrail)
+
+Run and record outputs (for troubleshooting later):
+
+```powershell
+where python
+where py
+py -0p
+where pip
+```
+
+Expectation for a stable system:
+- `py -3.12` works reliably
+- You will **not** rely on `python` or `pip` from PATH for HJB (venv only)
+
+---
+
+## 6. Git Installation
+
+### 6.1 Verify Git availability
+
+Run:
 
 ```powershell
 git --version
@@ -68,40 +135,9 @@ If Git is missing:
 
 ---
 
-## 5. Python Installation
+## 7. Repository Clone
 
-### 5.1 Verify Python launcher
-
-Run:
-
-```powershell
-py -0p
-```
-
-Expected:
-- Python 3.x interpreter listed (preferred 3.10+)
-
-### 5.2 Verify default Python version
-
-Run:
-
-```powershell
-py -3 --version
-```
-
-Record version here:
-- __________________________________________
-
-If Python is missing or outdated:
-- Install official Python for Windows
-- Enable “Add Python to PATH”
-- Reboot if required
-
----
-
-## 6. Repository Clone
-
-### 6.1 Choose canonical location
+### 7.1 Choose canonical location
 
 The repository must live at:
 
@@ -109,7 +145,7 @@ The repository must live at:
 C:\hjb-project\
 ```
 
-### 6.2 Clone repository
+### 7.2 Clone repository
 
 From PowerShell:
 
@@ -122,12 +158,64 @@ Verify:
 
 - [ ] `C:\hjb-project\README.md` exists
 - [ ] `C:\hjb-project\config\config.example.yaml` exists
+- [ ] `C:\hjb-project\docs\DEPLOYMENT.md` exists
 
 ---
 
-## 7. Local Configuration File
+## 8. Create Virtual Environment (venv)
 
-### 7.1 Create config.yaml
+Standard location:
+
+```
+C:\hjb-project\.venv\
+```
+
+### 8.1 Create venv
+
+```powershell
+cd C:\hjb-project
+py -3.12 -m venv .venv
+```
+
+- [ ] `.venv\` folder created
+
+### 8.2 Activate venv (optional; useful for interactive work)
+
+```powershell
+C:\hjb-project\.venv\Scripts\Activate.ps1
+python --version
+```
+
+Expected:
+- `Python 3.12.x`
+- Prompt shows `(.venv)`
+
+If activation is blocked, run once:
+
+```powershell
+Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned
+```
+
+Then re-activate.
+
+### 8.3 Upgrade packaging tools (recommended)
+
+```powershell
+C:\hjb-project\.venv\Scripts\python.exe -m pip install --upgrade pip setuptools wheel
+```
+
+### 8.4 Install project dependencies
+
+```powershell
+cd C:\hjb-project
+C:\hjb-project\.venv\Scripts\python.exe -m pip install -r requirements.txt
+```
+
+---
+
+## 9. Local Configuration File
+
+### 9.1 Create config.yaml
 
 From PowerShell:
 
@@ -139,7 +227,7 @@ copy config.example.yaml config.yaml
 - [ ] `config.yaml` exists
 - [ ] `config.yaml` is NOT committed to Git
 
-### 7.2 Edit config.yaml
+### 9.2 Edit config.yaml
 
 Fill in **only** the following for initial Success v0:
 
@@ -161,9 +249,9 @@ Save and close the file.
 
 ---
 
-## 8. Scratch Disk Preparation
+## 10. Scratch Disk Preparation
 
-### 8.1 OrionMX (NVMe scratch)
+### 10.1 OrionMX (NVMe scratch)
 
 Expected root:
 
@@ -183,18 +271,17 @@ Verify subfolders exist:
 
 If missing, create them manually.
 
-### 8.2 OrionMega (if applicable)
+### 10.2 OrionMega (if applicable)
 
 Scratch path:
-- __________________________________________
-
-Verify writable and stable.
+- [ ] Not configured initially (acceptable)
+- [ ] If later configured, record path here: ________________________________
 
 ---
 
-## 9. NAS Connectivity (Critical)
+## 11. NAS Connectivity (Critical)
 
-### 9.1 Verify access
+### 11.1 Verify access
 
 In File Explorer, navigate to:
 
@@ -207,7 +294,7 @@ Verify:
 - [ ] Folder opens without delay
 - [ ] Subfolders exist: `flags`, `logs`, `scheduled`
 
-### 9.2 Write test
+### 11.2 Write test
 
 Create a temporary file:
 
@@ -223,21 +310,19 @@ If this fails:
 
 ---
 
-## 10. System-Level Environment Variables (Secrets)
+## 12. System-Level Environment Variables (Secrets)
 
 Secrets are provided via **system environment variables** to ensure availability
 to services and scheduled tasks regardless of user context.
 
-### 10.1 Open Environment Variables UI
+### 12.1 Open Environment Variables UI
 
 1. Press **Win + R**
 2. Type `sysdm.cpl` → Enter
 3. Advanced tab → **Environment Variables**
 4. Under **System variables**, click **New**
 
----
-
-### 10.2 Define required variables
+### 12.2 Define required variables
 
 Create the following **System variables**:
 
@@ -251,13 +336,13 @@ Create the following **System variables**:
 
 Click OK to save.
 
-### 10.3 Reboot (required)
+### 12.3 Reboot (required)
 
 **Reboot the machine** to ensure system variables are visible to all processes.
 
 ---
 
-## 11. Verify Environment Variables
+## 13. Verify Environment Variables
 
 After reboot, open PowerShell and run:
 
@@ -267,7 +352,7 @@ After reboot, open PowerShell and run:
 ```
 
 Expected:
-- Password values returned (may appear as plain text)
+- Values returned (may appear as plain text)
 
 If blank:
 - Variable was not created correctly
@@ -275,18 +360,23 @@ If blank:
 
 ---
 
-## 12. Initial Watcher Smoke Test (Manual)
+## 14. Initial Watcher Smoke Test (Manual)
 
-### 12.1 Start watcher
+For Success v0, run the watcher using the venv Python (avoid PATH ambiguity).
 
-From PowerShell:
+### 14.1 OrionMX (continuous)
 
 ```powershell
 cd C:\hjb-project
-python scripts\watcher\hjb_watcher.py --continuous --watcher-id=orionmx_1
+C:\hjb-project\.venv\Scripts\python.exe scripts\watcher\hjb_watcher.py --continuous --watcher-id=orionmx_1
 ```
 
-(Use opportunistic flags for OrionMega.)
+### 14.2 OrionMega (opportunistic)
+
+```powershell
+cd C:\hjb-project
+C:\hjb-project\.venv\Scripts\python.exe scripts\watcher\hjb_watcher.py --opportunistic --watcher-id=orionmega_1
+```
 
 Expected:
 - No immediate exceptions
@@ -294,29 +384,35 @@ Expected:
 
 ---
 
-### 12.2 Verify heartbeat
+## 15. Verify Heartbeat
 
 Within 30–60 seconds, confirm file exists and updates:
 
+### OrionMX heartbeat
 ```
 \\RaneyHQ\Michael\02_Projects\Historical_Journals_Pipeline\0200_STATE\watcher_heartbeat.json
+```
+
+### OrionMega heartbeat (when running)
+```
+\\RaneyHQ\Michael\02_Projects\Historical_Journals_Pipeline\0200_STATE\watcher_heartbeat_orionmega_1.json
 ```
 
 - [ ] Timestamp updates
 
 ---
 
-### 12.3 Stop watcher
+## 16. Stop Watcher
 
 Press **Ctrl+C** and confirm graceful shutdown.
 
 ---
 
-## 13. Success v0 Confirmation
+## 17. Success v0 Confirmation
 
 Success v0 is achieved when:
 
-- [ ] Watcher starts cleanly
+- [ ] Watcher starts cleanly (using venv Python)
 - [ ] Heartbeat file updates
 - [ ] Logs are written
 - [ ] No DB or MediaWiki connectivity is required
@@ -328,7 +424,7 @@ ______________________________________________________________________
 
 ---
 
-## 14. Post-Setup Next Steps (Deferred)
+## 18. Post-Setup Next Steps (Deferred)
 
 Do **not** proceed until Success v0 is stable.
 
@@ -338,13 +434,3 @@ Deferred items:
 - Implement real Stage 1 tasks
 - Configure OrionMega Task Scheduler
 - Parallelize watchers
-
----
-
-## 15. Sign-off
-
-- Setup completed by: ______________________
-- Date: ______________________
-- Machine role confirmed:
-  - [ ] OrionMX
-  - [ ] OrionMega
