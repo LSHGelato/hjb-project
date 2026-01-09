@@ -10,8 +10,6 @@ and adheres to **Semantic Versioning** (https://semver.org/).
 
 ## [Unreleased]
 
-## [Unreleased]
-
 ### Added
 - Standardized Python runtime on Python 3.12 with project-local virtual environments
 - Introduced `requirements.in` and pinned `requirements.txt` for reproducible dependency installs
