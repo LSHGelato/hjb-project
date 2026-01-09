@@ -1,0 +1,129 @@
+# HJB Project Configuration (TEMPLATE)
+# Copy to config.yaml for local use. Do not commit config.yaml.
+# This template is aligned to Blueprint v2.4.
+
+project:
+  name: "Historical Journals & Books Project"
+  environment: "dev"              # dev | prod
+  timezone: "America/New_York"
+
+paths:
+  # UNC base paths (preferred). Use drive letters only if you must.
+  nas_root: "\\\\RaneyHQ\\Michael"
+
+  # Four-layer model roots
+  raw_root: "\\\\RaneyHQ\\Michael\\01_Research\\Historical_Journals_Inputs"
+  working_root: "\\\\RaneyHQ\\Michael\\02_Projects\\Historical_Journals_Pipeline"
+  reference_root: "\\\\RaneyHQ\\Michael\\05_Reference\\Historical_Journals_Library"
+
+  # Working-layer orchestration
+  state_root: "\\\\RaneyHQ\\Michael\\02_Projects\\Historical_Journals_Pipeline\\0200_STATE"
+  flags_root: "\\\\RaneyHQ\\Michael\\02_Projects\\Historical_Journals_Pipeline\\0200_STATE\\flags"
+  logs_root: "\\\\RaneyHQ\\Michael\\02_Projects\\Historical_Journals_Pipeline\\0200_STATE\\logs"
+  scheduled_root: "\\\\RaneyHQ\\Michael\\02_Projects\\Historical_Journals_Pipeline\\0200_STATE\\scheduled"
+
+  # Optional: local scratch (recommended for temp / high-IO work)
+  # On OrionMX, set this to your NVMe scratch disk (per your standard).
+  scratch_root: "C:\\Scratch\\NVMe"
+
+watcher:
+  mode: "continuous"              # continuous | opportunistic
+  watcher_id: "orionmx_1"
+  poll_interval_seconds: 30       # continuous typically 30; opportunistic typically 10
+  heartbeat_filename: "watcher_heartbeat.json"
+
+  # Priority behavior
+  priority_filter:
+    enabled: false                # opportunistic typically true
+    allowed: ["high", "normal"]   # used when enabled=true
+
+  # Task claiming directories (relative to flags_root)
+  queue_dirs:
+    pending: "pending"
+    processing: "processing"
+    completed: "completed"
+    failed: "failed"
+
+logging:
+  level: "INFO"                   # DEBUG | INFO | WARNING | ERROR
+  daily_log_filename_pattern: "{date}_processing.log"  # date = YYYY-MM-DD
+  also_print_to_console: true
+
+database:
+  # HostGator MySQL (Published layer)
+  enabled: true
+  host: "example.hostgator.mysql"         # set to real host
+  port: 3306
+  name: "hjb"
+  user: "hjb_user"
+
+  # Prefer environment variable injection for secrets in production.
+  # If you do not use env vars, place the password only in config.yaml (never committed).
+  password_env_var: "HJB_MYSQL_PASSWORD"
+  password: ""                            # optional fallback; keep empty in template
+
+  # Optional TLS settings (if available/required)
+  tls:
+    enabled: false
+    ca_cert_path: ""                      # e.g., "C:\\certs\\ca.pem"
+
+mediawiki:
+  enabled: false
+  api_url: "https://example.com/wiki/api.php"
+  username: "WikiBot"
+  password_env_var: "HJB_WIKI_PASSWORD"
+  password: ""                            # optional fallback; keep empty in template
+
+sources:
+  internet_archive:
+    enabled: true
+    # Where Stage 1 places IA downloads within Raw layer
+    raw_subdir: "0110_Internet_Archive"
+    # Collection organization examples: SIM vs Other
+    sim_subdir: "SIM"
+    other_subdir: "Other"
+
+processing:
+  # Stage toggles (pipeline capabilities vary as you implement)
+  stage1:
+    enabled: true
+    validate_hocr: true
+    validate_djvu: true
+    validate_scandata: true
+    page_count_checks: true
+
+  stage2:
+    enabled: true
+    image_preprocessing: true
+    ocr: true
+    segmentation: true
+
+  stage3:
+    enabled: false
+    deduplication: false
+
+  stage4:
+    enabled: false
+    export_wiki: false
+
+execution:
+  python:
+    # Optionally pin python executable paths per machine.
+    # Leave blank to use system default python in PATH.
+    python_exe: ""                          # e.g., "C:\\Python311\\python.exe"
+
+  concurrency:
+    # Keep conservative at first; increase after stability.
+    max_workers: 1
+
+  retries:
+    max_attempts: 3
+    backoff_seconds: 30
+
+quality:
+  # Example OCR confidence threshold for re-OCR or review queues
+  ocr_confidence_threshold: 70
+
+security:
+  # If true, scripts should refuse to run if secrets are missing when required.
+  fail_fast_on_missing_secrets: true
