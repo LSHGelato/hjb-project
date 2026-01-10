@@ -11,6 +11,7 @@ and adheres to **Semantic Versioning** (https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- Preflight doctor script to validate config, scratch, and NAS readiness
 - Standardized Python runtime on Python 3.12 with project-local virtual environments
 - Introduced `requirements.in` and pinned `requirements.txt` for reproducible dependency installs
 - Documented venv and dependency management strategy
