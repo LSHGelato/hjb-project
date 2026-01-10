@@ -204,6 +204,13 @@ Expected:
 
 ## 9) Success v0 Watcher Smoke Test
 
+Run hjb_doctor and confirm all checks pass before starting watchers.
+
+```powershell
+cd C:\hjb-project
+C:\hjb-project>C:\hjb-project\.venv\Scripts\python.exe scripts\doctor\hjb_doctor.py
+```
+
 Run the watcher using the venv Python:
 
 ### OrionMX
