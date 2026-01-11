@@ -21,15 +21,22 @@ import os
 import socket
 import sys
 import time
+import traceback
+import csv
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple, List
 
 import yaml
 
 
 def utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+TASK_SCHEMA_V1 = "hjb.task.v1"
+TASK_RESULT_SCHEMA_V1 = "hjb.task_result.v1"
+TASK_ERROR_SCHEMA_V1 = "hjb.task_error.v1"
 
 
 def load_yaml(path: Path) -> Dict[str, Any]:
@@ -156,6 +163,105 @@ def ensure_scratch_contract(scratch_root: Path) -> None:
         require_dir(p, f"SCRATCH subfolder '{sub}'")
 
 
+def execute_manifest_task(
+    manifest: Dict[str, Any],
+    task_id: str,
+    task_type: str,
+    attempt: int,
+    state_root: Path,
+    flags_root: Path,
+    watcher_id: str,
+) -> Tuple[List[str], Dict[str, Any]]:
+    """
+    Execute a manifest-driven JSON flag.
+    Returns: (outputs, metrics)
+    """
+    if task_type == "noop":
+        outdir = (flags_root / "completed" / task_id / "noop")
+        outdir.mkdir(parents=True, exist_ok=True)
+        ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        marker = outdir / f"noop_{task_id}_{ts}.txt"
+        marker.write_text("noop ok\n", encoding="utf-8")
+        return [str(marker)], {"noop": True}
+
+    if task_type == "stage1.inventory":
+        return task_stage1_inventory(manifest, task_id, flags_root)
+
+    raise ValueError(f"Unknown task_type: {task_type}")
+
+
+def task_stage1_inventory(manifest: Dict[str, Any], task_id: str, flags_root: Path) -> Tuple[List[str], Dict[str, Any]]:
+    payload = manifest.get("payload") or {}
+    if not isinstance(payload, dict):
+        raise ValueError("payload must be an object (dict)")
+
+    roots = payload.get("roots")
+    if not (isinstance(roots, list) and all(isinstance(x, str) and x.strip() for x in roots)):
+        raise KeyError("payload.roots must be a list of UNC path strings")
+
+    include_sha256 = bool(payload.get("include_sha256", False))
+
+    outdir = (flags_root / "completed" / task_id / "inventory")
+    outdir.mkdir(parents=True, exist_ok=True)
+
+    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    out_csv = outdir / f"inventory_{task_id}_{ts}.csv"
+
+    fields = ["root", "relpath", "fullpath", "size_bytes", "mtime_utc"]
+    if include_sha256:
+        fields.append("sha256")
+
+    files_seen = 0
+    bytes_seen = 0
+
+    with out_csv.open("w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=fields)
+        w.writeheader()
+
+        for root_s in roots:
+            root = Path(root_s)
+            if not root.exists():
+                raise FileNotFoundError(f"Inventory root does not exist: {root}")
+
+            for dirpath, _, filenames in os.walk(str(root)):
+                for name in filenames:
+                    full = Path(dirpath) / name
+                    try:
+                        st = full.stat()
+                    except OSError:
+                        continue
+
+                    files_seen += 1
+                    bytes_seen += int(st.st_size)
+                    mtime_utc = datetime.fromtimestamp(st.st_mtime, tz=timezone.utc).isoformat(timespec="seconds")
+                    try:
+                        rel = str(full.relative_to(root))
+                    except Exception:
+                        rel = ""
+
+                    row = {
+                        "root": str(root),
+                        "relpath": rel,
+                        "fullpath": str(full),
+                        "size_bytes": int(st.st_size),
+                        "mtime_utc": mtime_utc,
+                    }
+
+                    if include_sha256:
+                        try:
+                            import hashlib
+                            h = hashlib.sha256()
+                            with full.open("rb") as rf:
+                                for chunk in iter(lambda: rf.read(1024 * 1024), b""):
+                                    h.update(chunk)
+                            row["sha256"] = h.hexdigest()
+                        except OSError:
+                            row["sha256"] = ""
+
+                    w.writerow(row)
+
+    return [str(out_csv)], {"files_seen": files_seen, "bytes_seen": bytes_seen, "include_sha256": include_sha256}
+
 def run_once(
     watcher_id: str,
     state_root: Path,
@@ -166,7 +272,8 @@ def run_once(
     pending = flags_root / "pending"
     processing = flags_root / "processing"
     completed = flags_root / "completed"
-
+    failed = flags_root / "failed"
+    
     # Ensure required directories exist on NAS
     for p, label in [
         (state_root, "state_root"),
@@ -174,6 +281,7 @@ def run_once(
         (pending, "flags/pending"),
         (processing, "flags/processing"),
         (completed, "flags/completed"),
+        (failed, "flags/failed"),
         (logs_root, "logs_root"),
     ]:
         require_dir(p, label)
@@ -191,6 +299,127 @@ def run_once(
     }
     write_json(hb, hb_payload)
 
+    # ------------------------------------------------------------
+    # Manifest-driven JSON flags (one per cycle)
+    # Convention: any *.json in flags/pending is treated as a task manifest.
+    # ------------------------------------------------------------
+    json_candidates = sorted([p for p in pending.glob("*.json") if p.is_file()])
+    for src in json_candidates[:1]:
+        dst = processing / f"{src.name}.{watcher_id}.processing"
+        if not atomic_rename(src, dst):
+            continue
+
+        started_utc = utc_now_iso()
+        try:
+            manifest = json.loads(dst.read_text(encoding="utf-8"))
+            if not isinstance(manifest, dict):
+                raise ValueError("Task manifest JSON must be an object (dict)")
+
+            schema = manifest.get("schema")
+            if schema and schema != TASK_SCHEMA_V1:
+                raise ValueError(f"Unsupported task schema: {schema}")
+
+            task_type = manifest.get("task_type")
+            if not (isinstance(task_type, str) and task_type.strip()):
+                raise KeyError("Missing required task_type (string)")
+            task_type = task_type.strip()
+
+            task_id = manifest.get("task_id")
+            if not (isinstance(task_id, str) and task_id.strip()):
+                # fallback: derive from filename + timestamp
+                ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+                task_id = f"{ts}_{dst.stem}"
+            task_id = task_id.strip()
+
+            attempt = manifest.get("attempt")
+            attempt_i = attempt if isinstance(attempt, int) and attempt >= 1 else 1
+
+            # Execute
+            outputs, metrics = execute_manifest_task(
+                manifest=manifest,
+                task_id=task_id,
+                task_type=task_type,
+                attempt=attempt_i,
+                state_root=state_root,
+                flags_root=flags_root,
+                watcher_id=watcher_id,
+            )
+
+            # Archive manifest + write result under flags/completed/<task_id>/
+            outdir = completed / task_id
+            outdir.mkdir(parents=True, exist_ok=True)
+
+            (outdir / f"{task_id}.{watcher_id}.manifest.json").write_text(
+                dst.read_text(encoding="utf-8"), encoding="utf-8"
+            )
+
+            ts2 = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+            result_path = outdir / f"{task_id}.{watcher_id}.{ts2}.result.json"
+            write_json(result_path, {
+                "schema": TASK_RESULT_SCHEMA_V1,
+                "task_id": task_id,
+                "task_type": task_type,
+                "attempt": attempt_i,
+                "watcher_id": watcher_id,
+                "hostname": socket.gethostname(),
+                "pid": os.getpid(),
+                "started_utc": started_utc,
+                "ended_utc": utc_now_iso(),
+                "status": "ok",
+                "outputs": outputs,
+                "metrics": metrics,
+            })
+
+            # Clean up processing marker (preserve evidence by default as .done)
+            try:
+                dst.replace(outdir / f"{src.name}.{watcher_id}.done")
+            except Exception:
+                pass
+
+        except Exception as ex:
+            # Write error under flags/failed/<task_id-or-derived>/
+            ts_fail = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+            fallback_id = f"{ts_fail}_{dst.stem}"
+            try:
+                maybe = json.loads(dst.read_text(encoding="utf-8"))
+                if isinstance(maybe, dict) and isinstance(maybe.get("task_id"), str) and maybe.get("task_id").strip():
+                    fallback_id = maybe["task_id"].strip()
+            except Exception:
+                pass
+
+            errdir = failed / fallback_id
+            errdir.mkdir(parents=True, exist_ok=True)
+
+            try:
+                (errdir / f"{fallback_id}.{watcher_id}.manifest.json").write_text(
+                    dst.read_text(encoding="utf-8"), encoding="utf-8"
+                )
+            except Exception:
+                pass
+
+            err_path = errdir / f"{fallback_id}.{watcher_id}.{ts_fail}.error.json"
+            write_json(err_path, {
+                "schema": TASK_ERROR_SCHEMA_V1,
+                "task_id": fallback_id,
+                "watcher_id": watcher_id,
+                "hostname": socket.gethostname(),
+                "pid": os.getpid(),
+                "started_utc": started_utc,
+                "ended_utc": utc_now_iso(),
+                "status": "error",
+                "error_type": type(ex).__name__,
+                "error": str(ex),
+                "traceback": traceback.format_exc(limit=50),
+            })
+
+            try:
+                dst.replace(errdir / f"{src.name}.{watcher_id}.failed")
+            except Exception:
+                pass
+                
+        # Only one per cycle
+        break
+    
     # Claim a single no-op task if present.
     # Convention: files starting with "noop_" in flags/pending are safe Success v0 tasks.
     candidates = sorted([p for p in pending.glob("noop_*") if p.is_file()])
