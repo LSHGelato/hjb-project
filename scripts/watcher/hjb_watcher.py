@@ -190,6 +190,15 @@ def execute_manifest_task(
     raise ValueError(f"Unknown task_type: {task_type}")
 
 
+def _matches_any_glob(path_str: str, globs: List[str]) -> bool:
+    """
+    Windows-friendly glob matching against forward-slash-normalized paths.
+    """
+    from fnmatch import fnmatch
+    norm = path_str.replace("\\", "/")
+    return any(fnmatch(norm, g) for g in globs)
+
+
 def task_stage1_inventory(manifest: Dict[str, Any], task_id: str, flags_root: Path) -> Tuple[List[str], Dict[str, Any]]:
     payload = manifest.get("payload") or {}
     if not isinstance(payload, dict):
@@ -200,6 +209,16 @@ def task_stage1_inventory(manifest: Dict[str, Any], task_id: str, flags_root: Pa
         raise KeyError("payload.roots must be a list of UNC path strings")
 
     include_sha256 = bool(payload.get("include_sha256", False))
+
+    include_globs = payload.get("include_globs")
+    if include_globs is not None:
+        if not (isinstance(include_globs, list) and all(isinstance(x, str) for x in include_globs)):
+            raise ValueError("payload.include_globs must be a list of strings")
+
+    exclude_globs = payload.get("exclude_globs")
+    if exclude_globs is not None:
+        if not (isinstance(exclude_globs, list) and all(isinstance(x, str) for x in exclude_globs)):
+            raise ValueError("payload.exclude_globs must be a list of strings")
 
     outdir = (flags_root / "completed" / task_id / "inventory")
     outdir.mkdir(parents=True, exist_ok=True)
@@ -226,6 +245,22 @@ def task_stage1_inventory(manifest: Dict[str, Any], task_id: str, flags_root: Pa
             for dirpath, _, filenames in os.walk(str(root)):
                 for name in filenames:
                     full = Path(dirpath) / name
+
+                    # Normalize once for matching
+                    full_str = str(full)
+
+                    # Hard default exclusions (always on)
+                    if "\\flags\\completed\\" in full_str or "\\flags\\failed\\" in full_str:
+                        continue
+
+                    # Operator-specified exclusions
+                    if exclude_globs and _matches_any_glob(full_str, exclude_globs):
+                        continue
+
+                    # Operator-specified inclusions
+                    if include_globs and not _matches_any_glob(full_str, include_globs):
+                        continue
+
                     try:
                         st = full.stat()
                     except OSError:
