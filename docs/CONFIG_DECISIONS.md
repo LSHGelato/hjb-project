@@ -20,7 +20,7 @@ Owner: Michael
 - Watcher mode: continuous
 - Watcher ID (decide now): `orionmx_1`  (change if needed: ____________)
 - Expected Python launcher:
-  - Preferred: `py -3.11`
+  - Preferred: `py -3.12`
   - Alternate full path (if needed): `__________________________________________`
 
 ### OrionMega (opportunistic)
@@ -31,7 +31,7 @@ Owner: Michael
   - [ ] Manual only (initially)
   - [ ] Task Scheduler (later)
 - Expected Python launcher:
-  - Preferred: `py -3.11`
+  - Preferred: `py -3.12`
   - Alternate full path (if needed): `__________________________________________`
 
 ---
@@ -63,6 +63,25 @@ Confirm these are the canonical values for `config.yaml`:
 
 Notes / deviations (if any):
 - _____________________________________________________________
+
+## B.1 Inputs Partitioning (Operational)
+
+These settings define **how raw inputs are physically placed on disk**.
+They do not define ingestion policy, only deterministic path construction.
+
+- IA/SIM partitioning mode:
+  - `SIM/<safe_family>/<year>/<IAIdentifier>/`
+
+- Year derivation:
+  - Extract from IA identifier when parseable
+  - Fallback bucket: `_unknown_year`
+
+- Unmapped family handling:
+  - Place under: `SIM/_unmapped/<IAIdentifier>/`
+  - Emit warning in task result JSON
+
+- Partitioning applies only to:
+  - `0110_Internet_Archive/SIM`
 
 ---
 
@@ -107,11 +126,37 @@ Notes / deviations (if any):
 
 Chosen approach: **environment variables** (no secrets in config files).
 
+### Global / Watcher
+- `HJB_WATCHER_ID`
+  - Required on all machines
+  - Overrides CLI value when present
+
+### Family Mapping
+- Mapping source:
+  - File-based mapping (CSV or YAML)
+- Canonical path:
+  - `config/ia_family_map.csv` (or `.yaml`)
+- Resolution precedence:
+  1. Explicit manifest override (rare)
+  2. Mapping file
+  3. `_unmapped` fallback
+
+### MySQL Integration Mode
+- Ingestion DB behavior:
+  - **Option B**: DB updates performed by a follow-on task
+  - Ingestion tasks must succeed without DB connectivity
+  - DB-upsert task is retryable and idempotent
+
 ### MySQL (HostGator)
 - database.enabled for Success v0:
   - [x] false (will enable later)
 - Env var name:
   - `HJB_MYSQL_PASSWORD`
+- Additional required env vars (when enabled):
+  - `HJB_MYSQL_HOST`
+  - `HJB_MYSQL_DB`
+  - `HJB_MYSQL_USER`
+
 - Host:
   - `__________________________________________`
 - Database name:
