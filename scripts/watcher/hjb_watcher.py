@@ -220,6 +220,25 @@ def task_stage1_inventory(manifest: Dict[str, Any], task_id: str, flags_root: Pa
         if not (isinstance(exclude_globs, list) and all(isinstance(x, str) for x in exclude_globs)):
             raise ValueError("payload.exclude_globs must be a list of strings")
 
+    # Safety brakes (defaults ON)
+    # - set max_files=0 to disable
+    # - set max_seconds=0 to disable
+    max_files = payload.get("max_files", 100000)
+    max_seconds = payload.get("max_seconds", 1800)  # 30 minutes
+
+    if max_files is None:
+        max_files = 100000
+    if max_seconds is None:
+        max_seconds = 1800
+
+    if not isinstance(max_files, int) or max_files < 0:
+        raise ValueError("payload.max_files must be an int >= 0 (0 disables the limit)")
+    if not isinstance(max_seconds, int) or max_seconds < 0:
+        raise ValueError("payload.max_seconds must be an int >= 0 (0 disables the limit)")
+
+    started = time.monotonic()
+    stopped_reason: Optional[str] = None
+
     outdir = (flags_root / "completed" / task_id / "inventory")
     outdir.mkdir(parents=True, exist_ok=True)
 
@@ -242,8 +261,34 @@ def task_stage1_inventory(manifest: Dict[str, Any], task_id: str, flags_root: Pa
             if not root.exists():
                 raise FileNotFoundError(f"Inventory root does not exist: {root}")
 
-            for dirpath, _, filenames in os.walk(str(root)):
+            for dirpath, dirnames, filenames in os.walk(str(root)):
+                # Safety brake: time-based (checked per directory)
+                if max_seconds and (time.monotonic() - started) > max_seconds:
+                    stopped_reason = f"max_seconds_exceeded({max_seconds})"
+                    break
+
+                # Prune excluded directories so we do not traverse them at all
+                pruned: List[str] = []
+                for d in dirnames:
+                    d_full = str(Path(dirpath) / d)
+
+                    # Always prune flag archives
+                    if "\\flags\\completed\\" in d_full or "\\flags\\failed\\" in d_full:
+                        continue
+
+                    # Operator exclusions prune traversal
+                    if exclude_globs and _matches_any_glob(d_full, exclude_globs):
+                        continue
+
+                    pruned.append(d)
+                dirnames[:] = pruned
+
                 for name in filenames:
+                    # Safety brake: count-based
+                    if max_files and files_seen >= max_files:
+                        stopped_reason = f"max_files_reached({max_files})"
+                        break
+
                     full = Path(dirpath) / name
 
                     # Normalize once for matching
@@ -295,7 +340,21 @@ def task_stage1_inventory(manifest: Dict[str, Any], task_id: str, flags_root: Pa
 
                     w.writerow(row)
 
-    return [str(out_csv)], {"files_seen": files_seen, "bytes_seen": bytes_seen, "include_sha256": include_sha256}
+                if stopped_reason:
+                    break
+
+            if stopped_reason:
+                break
+
+    return [str(out_csv)], {
+        "files_seen": files_seen,
+        "bytes_seen": bytes_seen,
+        "include_sha256": include_sha256,
+        "max_files": max_files,
+        "max_seconds": max_seconds,
+        "stopped_reason": stopped_reason,
+        "elapsed_seconds": int(time.monotonic() - started),
+    }
 
 def run_once(
     watcher_id: str,
@@ -489,12 +548,22 @@ def run_once(
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--watcher-id", required=True)
+    ap.add_argument("--watcher-id", required=False)
     ap.add_argument("--continuous", action="store_true", help="Run forever (Success v0 loop).")
     ap.add_argument("--opportunistic", action="store_true", help="Alias of continuous for now.")
     ap.add_argument("--poll-seconds", type=int, default=30)
     ap.add_argument("--config", default=None, help="Optional path to config YAML.")
     args = ap.parse_args()
+
+    # Resolve watcher id:
+    # - prefer CLI --watcher-id
+    # - else fall back to machine-level env var HJB_WATCHER_ID
+    watcher_id = args.watcher_id
+    if not watcher_id:
+        watcher_id = os.environ.get("HJB_WATCHER_ID")
+    if not watcher_id or not str(watcher_id).strip():
+        raise SystemExit("Missing watcher id: supply --watcher-id or set system env var HJB_WATCHER_ID")
+    watcher_id = str(watcher_id).strip()
 
     repo_root = Path(__file__).resolve().parents[2]  # .../scripts/watcher/hjb_watcher.py -> repo root
     cfg = get_config(repo_root, args.config)
@@ -509,7 +578,7 @@ def main() -> int:
     if not loop:
         # single cycle useful for testing
         run_once(
-            watcher_id=args.watcher_id,
+            watcher_id=watcher_id,
             state_root=paths["state_root"],
             flags_root=paths["flags_root"],
             logs_root=paths["logs_root"],
@@ -517,7 +586,7 @@ def main() -> int:
         )
         return 0
 
-    print(f"[HJB] watcher_id={args.watcher_id} mode=continuous poll={args.poll_seconds}s")
+    print(f"[HJB] watcher_id={watcher_id} mode=continuous poll={args.poll_seconds}s")
     print(f"[HJB] state_root={paths['state_root']}")
     print(f"[HJB] flags_root={paths['flags_root']}")
     print(f"[HJB] logs_root={paths['logs_root']}")
@@ -525,7 +594,7 @@ def main() -> int:
 
     while True:
         run_once(
-            watcher_id=args.watcher_id,
+            watcher_id=watcher_id,
             state_root=paths["state_root"],
             flags_root=paths["flags_root"],
             logs_root=paths["logs_root"],
