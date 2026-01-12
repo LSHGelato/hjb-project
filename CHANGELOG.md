@@ -11,6 +11,7 @@ and adheres to **Semantic Versioning** (https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- Supervisor script for automated watcher updates via update flag + heartbeat-PID shutdown
 - Wrapper scripts to run watcher per host
 - Env-var fallback HJB_WATCHER_ID (Machine scope)
 - Inventory safety brakes (max_files, max_seconds)
