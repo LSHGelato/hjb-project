@@ -11,6 +11,9 @@ and adheres to **Semantic Versioning** (https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- Wrapper scripts to run watcher per host
+- Env-var fallback HJB_WATCHER_ID (Machine scope)
+- Inventory safety brakes (max_files, max_seconds)
 - Manifest-driven JSON flags executed from flags/pending with results in flags/completed and errors in flags/failed
 - Stage 1 inventory task producing CSV manifests
 - Preflight doctor script to validate config, scratch, and NAS readiness
@@ -24,6 +27,7 @@ and adheres to **Semantic Versioning** (https://semver.org/).
 - Changelog scaffolding
 
 ### Changed
+- Inventory now prunes excluded directories (performance)
 - Clarified local setup expectations to require venv-based execution for watchers
 
 ---
