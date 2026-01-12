@@ -1,9 +1,10 @@
 # scripts/ops/hjb_supervisor.ps1
 # HJB Supervisor
-# - Watches for ops_update_watcher.flag in flags/pending
+# - Watches for ops_update_watcher.flag OR ops_restart_watcher.flag in flags/pending
 # - Stops watcher using PID from heartbeat JSON
-# - git pull --rebase origin main
-# - (optional) run doctor
+# - For update: git pull --rebase origin main
+# - For restart: no git; just stop/start
+# - (optional) run doctor for both
 # - restarts watcher via wrapper script
 #
 # Intended to be run by Windows Task Scheduler on each machine.
@@ -239,16 +240,23 @@ foreach ($p in @($flagsRoot, $pending, $processing, $completed, $failed)) {
 }
 
 # Trigger file name (must NOT be .json and must NOT start with noop_)
-$triggerName = "ops_update_watcher.flag"
-$triggerPath = Join-Path $pending $triggerName
+$triggers = @(
+    @{ name = "ops_update_watcher.flag"; mode = "update" },
+    @{ name = "ops_restart_watcher.flag"; mode = "restart" }
+)
 
-if (!(Test-Path $triggerPath)) {
-    # No-op: nothing to do
-    exit 0
+$selected = $null
+foreach ($t in $triggers) {
+    $p = Join-Path $pending $t.name
+    if (Test-Path $p) { $selected = @{ name = $t.name; mode = $t.mode; path = $p }; break }
 }
+if ($null -eq $selected) { exit 0 }
 
 # Claim trigger atomically
 $host = $env:COMPUTERNAME
+$triggerName = $selected.name
+$mode = $selected.mode
+$triggerPath = $selected.path
 $claim = Join-Path $processing "$triggerName.$host.processing"
 
 try {
@@ -264,14 +272,19 @@ try {
     $hb = Read-Heartbeat $paths.heartbeat_path
     Stop-WatcherByHeartbeat $hb
 
-    Git-PullRebase $repoRoot
+    if ($mode -eq "update") {
+        Git-PullRebase $repoRoot
+    } else {
+        Write-Log "Restart mode: skipping git update."
+    }
 
     Run-DoctorIfPresent $repoRoot $py
 
     Start-WatcherViaWrapper $repoRoot
 
     # Mark trigger as done
-    $doneDir = Join-Path $completed "ops_update_watcher"
+    $bucket = if ($mode -eq "update") { "ops_update_watcher" } else { "ops_restart_watcher" }
+    $doneDir = Join-Path $completed $bucket
     New-Item -ItemType Directory -Force -Path $doneDir | Out-Null
     $donePath = Join-Path $doneDir "$triggerName.$host.done"
     Move-Item -LiteralPath $claim -Destination $donePath -Force
@@ -280,6 +293,7 @@ try {
         heartbeat_path = $paths.heartbeat_path
         repo_root = $repoRoot
         trigger = $triggerName
+        mode = $mode
         trigger_done = $donePath
     }
     Write-Log "Update succeeded. Result: $out"
@@ -288,8 +302,8 @@ try {
 catch {
     $err = $_
     Write-Log "Update FAILED: $($err.Exception.Message)"
-
-    $failDir = Join-Path $failed "ops_update_watcher"
+    $bucket = if ($mode -eq "update") { "ops_update_watcher" } else { "ops_restart_watcher" }
+    $failDir = Join-Path $failed $bucket
     New-Item -ItemType Directory -Force -Path $failDir | Out-Null
     $failPath = Join-Path $failDir "$triggerName.$host.failed"
     try { Move-Item -LiteralPath $claim -Destination $failPath -Force } catch { }
@@ -298,6 +312,7 @@ catch {
         heartbeat_path = $paths.heartbeat_path
         repo_root = $repoRoot
         trigger = $triggerName
+        mode = $mode
         trigger_failed = $failPath
         error = $err.Exception.Message
     }
