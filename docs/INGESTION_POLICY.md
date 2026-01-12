@@ -26,6 +26,8 @@ This policy applies to **all sources**, including:
 - Institutional or third-party datasets
 - Pre-existing files already on disk
 
+Pre-existing files are treated as **new acquisitions** for the purposes of ingestion.
+
 ---
 
 ## 2. Guiding Principle (Non-Negotiable)
@@ -141,6 +143,27 @@ SIM/
 SIM/_unmapped/<IAIdentifier>/
 ```
 - No files are ever modified in place after ingestion.
+
+---
+
+## 4.3 Pre-Existing Files on Disk
+
+Files that already exist on local or NAS storage **must still pass through the ingestion process**.
+
+Rules:
+
+- Source files are selected explicitly (by identifier, path, or manifest), not assumed valid by location alone.
+- Pre-existing IA files are treated **as if freshly downloaded from archive.org**.
+- The same tier rules, validation checks, and placement logic apply.
+- Files are copied or relocated into the canonical Inputs structure if needed.
+- Provenance must indicate the true origin (e.g., “pre-existing local copy of IA item”).
+
+Rationale:
+
+- Ensures uniform handling of historical and newly acquired material.
+- Prevents “special-case” pipelines that diverge from canonical rules.
+- Allows legacy holdings to be validated, normalized, and deduplicated correctly.
+
 
 ---
 
