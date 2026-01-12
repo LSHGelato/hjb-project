@@ -11,6 +11,7 @@ and adheres to **Semantic Versioning** (https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- Supervisor restart trigger ops_restart_watcher.flag (stop/start watcher without repo update)
 - Supervisor script for automated watcher updates via update flag + heartbeat-PID shutdown
 - Wrapper scripts to run watcher per host
 - Env-var fallback HJB_WATCHER_ID (Machine scope)
