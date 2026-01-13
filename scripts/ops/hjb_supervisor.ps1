@@ -303,11 +303,11 @@ foreach ($t in $triggers) {
 if ($null -eq $selected) { exit 0 }
 
 # Claim trigger atomically
-$host = $env:COMPUTERNAME
+$hostname = $env:COMPUTERNAME
 $triggerName = $selected.name
 $mode = $selected.mode
 $triggerPath = $selected.path
-$claim = Join-Path $processing "$triggerName.$host.processing"
+$claim = Join-Path $processing "$triggerName.$hostname.processing"
 
 try {
     Move-Item -LiteralPath $triggerPath -Destination $claim -ErrorAction Stop
@@ -336,7 +336,7 @@ try {
     $bucket = if ($mode -eq "update") { "ops_update_watcher" } else { "ops_restart_watcher" }
     $doneDir = Join-Path $completed $bucket
     New-Item -ItemType Directory -Force -Path $doneDir | Out-Null
-    $donePath = Join-Path $doneDir "$triggerName.$host.done"
+    $donePath = Join-Path $doneDir "$triggerName.$hostname.done"
     Move-Item -LiteralPath $claim -Destination $donePath -Force
 
     $out = Write-ResultJson $flagsRoot "ok" @{
@@ -355,7 +355,7 @@ catch {
     $bucket = if ($mode -eq "update") { "ops_update_watcher" } else { "ops_restart_watcher" }
     $failDir = Join-Path $failed $bucket
     New-Item -ItemType Directory -Force -Path $failDir | Out-Null
-    $failPath = Join-Path $failDir "$triggerName.$host.failed"
+    $failPath = Join-Path $failDir "$triggerName.$hostname.failed"
     try { Move-Item -LiteralPath $claim -Destination $failPath -Force } catch { }
 
     $out = Write-ResultJson $flagsRoot "error" @{
