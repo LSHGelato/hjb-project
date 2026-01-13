@@ -242,22 +242,22 @@ function Start-WatcherViaWrapper([string]$repoRoot) {
 
 function Write-ResultJson([string]$flagsRoot, [string]$status, [hashtable]$data) {
     $ts = (Get-Date).ToUniversalTime().ToString("yyyyMMddTHHmmssZ")
-    $host = $env:COMPUTERNAME
+    $hostname = $env:COMPUTERNAME
 
     if ($status -eq "ok") {
         $outDir = Join-Path $flagsRoot "completed\ops_update_watcher"
         New-Item -ItemType Directory -Force -Path $outDir | Out-Null
-        $outPath = Join-Path $outDir "ops_update_watcher.$host.$ts.result.json"
+        $outPath = Join-Path $outDir "ops_update_watcher.$hostname.$ts.result.json"
     } else {
         $outDir = Join-Path $flagsRoot "failed\ops_update_watcher"
         New-Item -ItemType Directory -Force -Path $outDir | Out-Null
-        $outPath = Join-Path $outDir "ops_update_watcher.$host.$ts.error.json"
+        $outPath = Join-Path $outDir "ops_update_watcher.$hostname.$ts.error.json"
     }
 
     $payload = @{
         schema = if ($status -eq "ok") { "hjb.ops_update_result.v1" } else { "hjb.ops_update_error.v1" }
         utc = (Get-Date).ToUniversalTime().ToString("o")
-        hostname = $host
+        hostname = $hostname
         watcher_id = $env:HJB_WATCHER_ID
         status = $status
     }
