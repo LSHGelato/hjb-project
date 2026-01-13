@@ -330,6 +330,11 @@ $repoRoot = Get-RepoRoot
 $py = Get-VenvPython $repoRoot
 $paths = Get-HjbPathsFromConfig $repoRoot $py
 
+$supervisorStampDir = Join-Path $paths.state_root "supervisor"
+New-Item -ItemType Directory -Force -Path $supervisorStampDir | Out-Null
+$stampPath = Join-Path $supervisorStampDir ("supervisor_" + $env:COMPUTERNAME + ".last_run.txt")
+Set-Content -LiteralPath $stampPath -Value ((Get-Date).ToUniversalTime().ToString("o")) -Encoding UTF8
+
 $flagsRoot = $paths.flags_root
 $pending = Join-Path $flagsRoot "pending"
 $processing = Join-Path $flagsRoot "processing"
