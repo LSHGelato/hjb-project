@@ -102,6 +102,54 @@ def heartbeat_path(state_root: Path, watcher_id: str) -> Path:
         return state_root / "watcher_heartbeat.json"
     return state_root / f"watcher_heartbeat_{watcher_id}.json"
 
+def acquire_single_instance_lock(state_root: Path, watcher_id: str) -> Path:
+    """
+    Enforce one active watcher per watcher_id across the share.
+    Uses atomic directory creation on SMB/NTFS:
+      state_root/locks/watcher_<id>.lock/
+        owner.json
+    If the lock already exists, we exit immediately.
+    """
+    locks_root = state_root / "locks"
+    locks_root.mkdir(parents=True, exist_ok=True)
+
+    lock_dir = locks_root / f"watcher_{watcher_id}.lock"
+    owner_path = lock_dir / "owner.json"
+
+    try:
+        lock_dir.mkdir()  # atomic: fails if exists
+    except FileExistsError:
+        raise SystemExit(
+            f"Watcher lock already held: {lock_dir}. "
+            f"Another watcher instance for '{watcher_id}' is running (or a stale lock exists)."
+        )
+
+    # Best-effort: record owner information (not required for locking)
+    try:
+        owner = {
+            "watcher_id": watcher_id,
+            "hostname": socket.gethostname(),
+            "pid": os.getpid(),
+            "utc": utc_now_iso(),
+        }
+        owner_path.write_text(json.dumps(owner, indent=2, sort_keys=True), encoding="utf-8")
+    except Exception:
+        pass
+
+    return lock_dir
+
+def release_single_instance_lock(lock_dir: Optional[Path]) -> None:
+    if not lock_dir:
+        return
+    try:
+        # Remove owner.json first if present
+        owner_path = lock_dir / "owner.json"
+        if owner_path.exists():
+            owner_path.unlink()
+        lock_dir.rmdir()
+    except Exception:
+        # Do not fail shutdown on cleanup issues
+        pass
 
 def parse_paths(cfg: Dict[str, Any]) -> Dict[str, Path]:
     """
@@ -574,6 +622,15 @@ def main() -> int:
     # Fail-fast scratch contract
     ensure_scratch_contract(scratch_root)
 
+    # Enforce one active watcher per watcher_id (prevents duplicate instances)
+    lock_dir: Optional[Path] = None
+    try:
+        lock_dir = acquire_single_instance_lock(paths["state_root"], watcher_id)
+    except SystemExit:
+        raise
+    except Exception as ex:
+        raise SystemExit(f"Failed to acquire watcher lock for '{watcher_id}': {ex}")
+
     loop = args.continuous or args.opportunistic
     if not loop:
         # single cycle useful for testing
@@ -592,16 +649,18 @@ def main() -> int:
     print(f"[HJB] logs_root={paths['logs_root']}")
     print(f"[HJB] scratch_root={scratch_root}")
 
-    while True:
-        run_once(
-            watcher_id=watcher_id,
-            state_root=paths["state_root"],
-            flags_root=paths["flags_root"],
-            logs_root=paths["logs_root"],
-            poll_seconds=args.poll_seconds,
-        )
-        time.sleep(max(1, args.poll_seconds))
-
+    try:
+        while True:
+            run_once(
+                watcher_id=watcher_id,
+                state_root=paths["state_root"],
+                flags_root=paths["flags_root"],
+                logs_root=paths["logs_root"],
+                poll_seconds=args.poll_seconds,
+            )
+            time.sleep(max(1, args.poll_seconds))
+    finally:
+        release_single_instance_lock(lock_dir)
 
 if __name__ == "__main__":
     raise SystemExit(main())
