@@ -17,6 +17,59 @@ function Write-Log([string]$msg) {
     Write-Host "[$ts] $msg"
 }
 
+function Get-UtcNowIso() {
+    return (Get-Date).ToUniversalTime().ToString("o")
+}
+
+function Ensure-Dir([string]$path) {
+    if (!(Test-Path $path)) {
+        New-Item -ItemType Directory -Force -Path $path | Out-Null
+    }
+}
+
+function Get-HeartbeatFreshness([object]$hbObj, [int]$pollSeconds) {
+    # Returns @{ fresh = $true/$false; age_seconds = <int or $null> }
+    if ($null -eq $hbObj) { return @{ fresh = $false; age_seconds = $null } }
+    if ($null -eq $hbObj.utc) { return @{ fresh = $false; age_seconds = $null } }
+    try {
+        $hbUtc = [DateTimeOffset]::Parse([string]$hbObj.utc)
+        $age = [int]((Get-Date).ToUniversalTime() - $hbUtc.UtcDateTime).TotalSeconds
+        $threshold = (2 * [Math]::Max(1,$pollSeconds)) + 10
+        return @{ fresh = ($age -le $threshold); age_seconds = $age }
+    } catch {
+        return @{ fresh = $false; age_seconds = $null }
+    }
+}
+
+function Write-SupervisorHeartbeat([string]$stateRoot, [string]$watcherId, [string]$status, [hashtable]$extra) {
+    # Always leaves an auditable breadcrumb on the NAS.
+    $path = Join-Path $stateRoot ("supervisor_heartbeat_{0}.json" -f $watcherId)
+    $payload = @{
+        schema     = "hjb.supervisor_heartbeat.v1"
+        utc        = Get-UtcNowIso
+        hostname   = $env:COMPUTERNAME
+        watcher_id = $watcherId
+        status     = $status
+        pid        = $PID
+    }
+    foreach ($k in $extra.Keys) { $payload[$k] = $extra[$k] }
+    $json = ($payload | ConvertTo-Json -Depth 8)
+    $tmp = "$path.tmp"
+    Set-Content -LiteralPath $tmp -Value $json -Encoding UTF8
+    Move-Item -LiteralPath $tmp -Destination $path -Force
+    return $path
+}
+
+function Write-SupervisorLog([string]$logsRoot, [string]$watcherId, [string]$msg) {
+    # Append-only log on NAS to remove "opaque" behavior from Task Scheduler runs.
+    $dir = Join-Path $logsRoot "supervisor"
+    Ensure-Dir $dir
+    $logPath = Join-Path $dir ("supervisor_{0}.log" -f $watcherId)
+    $line = "[{0}] {1}`r`n" -f (Get-Date).ToString("s"), $msg
+    Add-Content -LiteralPath $logPath -Value $line -Encoding UTF8
+    return $logPath
+}
+
 function New-TempFilePath([string]$prefix, [string]$suffix) {
     $ts = (Get-Date).ToUniversalTime().ToString("yyyyMMddTHHmmssZ")
     $rand = [Guid]::NewGuid().ToString("N")
@@ -242,22 +295,22 @@ function Start-WatcherViaWrapper([string]$repoRoot) {
 
 function Write-ResultJson([string]$flagsRoot, [string]$status, [hashtable]$data) {
     $ts = (Get-Date).ToUniversalTime().ToString("yyyyMMddTHHmmssZ")
-    $hostname = $env:COMPUTERNAME
+    $computerName = $env:COMPUTERNAME
 
     if ($status -eq "ok") {
         $outDir = Join-Path $flagsRoot "completed\ops_update_watcher"
         New-Item -ItemType Directory -Force -Path $outDir | Out-Null
-        $outPath = Join-Path $outDir "ops_update_watcher.$hostname.$ts.result.json"
+        $outPath = Join-Path $outDir "ops_update_watcher.$computerName.$ts.result.json"
     } else {
         $outDir = Join-Path $flagsRoot "failed\ops_update_watcher"
         New-Item -ItemType Directory -Force -Path $outDir | Out-Null
-        $outPath = Join-Path $outDir "ops_update_watcher.$hostname.$ts.error.json"
+        $outPath = Join-Path $outDir "ops_update_watcher.$computerName.$ts.error.json"
     }
 
     $payload = @{
         schema = if ($status -eq "ok") { "hjb.ops_update_result.v1" } else { "hjb.ops_update_error.v1" }
         utc = (Get-Date).ToUniversalTime().ToString("o")
-        hostname = $hostname
+        hostname = $computerName
         watcher_id = $env:HJB_WATCHER_ID
         status = $status
     }
@@ -284,6 +337,19 @@ $processing = Join-Path $flagsRoot "processing"
 $completed = Join-Path $flagsRoot "completed"
 $failed = Join-Path $flagsRoot "failed"
 
+# Supervisor observability (NAS-based)
+$watcherId = [string]$env:HJB_WATCHER_ID
+if ([string]::IsNullOrWhiteSpace($watcherId)) { $watcherId = [string]$paths.watcher_id }
+$watcherId = $watcherId.Trim()
+$logsRoot = Join-Path $paths.state_root "logs"
+$superLog = $null
+try {
+    $superLog = Write-SupervisorLog $logsRoot $watcherId "Supervisor start. repoRoot=$repoRoot config=$($paths.config_path)"
+} catch { }
+try {
+    Write-SupervisorHeartbeat $paths.state_root $watcherId "running" @{ note = "start"; log_path = $superLog } | Out-Null
+} catch { }
+
 # Ensure expected dirs exist
 foreach ($p in @($flagsRoot, $pending, $processing, $completed, $failed)) {
     if (!(Test-Path $p)) { throw "Required flags directory missing: $p" }
@@ -300,14 +366,28 @@ foreach ($t in $triggers) {
     $p = Join-Path $pending $t.name
     if (Test-Path $p) { $selected = @{ name = $t.name; mode = $t.mode; path = $p }; break }
 }
-if ($null -eq $selected) { exit 0 }
+
+# If no trigger exists, still leave a breadcrumb and optionally exit early if watcher is healthy.
+if ($null -eq $selected) {
+    try {
+        $hb0 = Read-Heartbeat $paths.heartbeat_path
+        $poll = 30
+        if ($hb0 -and $hb0.poll_seconds) { $poll = [int]$hb0.poll_seconds }
+        $fresh = Get-HeartbeatFreshness $hb0 $poll
+        $msg = if ($fresh.fresh) { "No trigger. Watcher heartbeat fresh (age=$($fresh.age_seconds)s). Exiting." } else { "No trigger. Heartbeat stale/missing (age=$($fresh.age_seconds)). Exiting." }
+        Write-Log $msg
+        if ($superLog) { Write-SupervisorLog $logsRoot $watcherId $msg | Out-Null }
+        Write-SupervisorHeartbeat $paths.state_root $watcherId "ok" @{ mode="noop"; heartbeat_path=$paths.heartbeat_path; heartbeat_age_seconds=$fresh.age_seconds } | Out-Null
+    } catch { }
+    exit 0
+}
 
 # Claim trigger atomically
-$hostname = $env:COMPUTERNAME
+$computerName = $env:COMPUTERNAME
 $triggerName = $selected.name
 $mode = $selected.mode
 $triggerPath = $selected.path
-$claim = Join-Path $processing "$triggerName.$hostname.processing"
+$claim = Join-Path $processing "$triggerName.$computerName.processing"
 
 try {
     Move-Item -LiteralPath $triggerPath -Destination $claim -ErrorAction Stop
@@ -317,11 +397,13 @@ try {
 }
 
 Write-Log "Claimed update trigger: $claim"
+if ($superLog) { try { Write-SupervisorLog $logsRoot $watcherId "Claimed trigger: $claim mode=$mode" | Out-Null } catch { } }
 
 try {
     $hb = Read-Heartbeat $paths.heartbeat_path
+    # If watcher appears healthy and this is a restart-only trigger, we still honor the trigger.
     Stop-WatcherByHeartbeat $hb
-
+ 
     if ($mode -eq "update") {
         Git-PullRebase $repoRoot
     } else {
@@ -336,7 +418,7 @@ try {
     $bucket = if ($mode -eq "update") { "ops_update_watcher" } else { "ops_restart_watcher" }
     $doneDir = Join-Path $completed $bucket
     New-Item -ItemType Directory -Force -Path $doneDir | Out-Null
-    $donePath = Join-Path $doneDir "$triggerName.$hostname.done"
+    $donePath = Join-Path $doneDir "$triggerName.$computerName.done"
     Move-Item -LiteralPath $claim -Destination $donePath -Force
 
     $out = Write-ResultJson $flagsRoot "ok" @{
@@ -347,6 +429,8 @@ try {
         trigger_done = $donePath
     }
     Write-Log "Update succeeded. Result: $out"
+    if ($superLog) { try { Write-SupervisorLog $logsRoot $watcherId "Succeeded. result=$out done=$donePath" | Out-Null } catch { } }
+    try { Write-SupervisorHeartbeat $paths.state_root $watcherId "ok" @{ trigger=$triggerName; mode=$mode; result_path=$out; done_path=$donePath } | Out-Null } catch { }
     exit 0
 }
 catch {
@@ -355,7 +439,7 @@ catch {
     $bucket = if ($mode -eq "update") { "ops_update_watcher" } else { "ops_restart_watcher" }
     $failDir = Join-Path $failed $bucket
     New-Item -ItemType Directory -Force -Path $failDir | Out-Null
-    $failPath = Join-Path $failDir "$triggerName.$hostname.failed"
+    $failPath = Join-Path $failDir "$triggerName.$computerName.failed"
     try { Move-Item -LiteralPath $claim -Destination $failPath -Force } catch { }
 
     $out = Write-ResultJson $flagsRoot "error" @{
@@ -367,5 +451,7 @@ catch {
         error = $err.Exception.Message
     }
     Write-Log "Wrote error record: $out"
+    if ($superLog) { try { Write-SupervisorLog $logsRoot $watcherId "FAILED. error=$($err.Exception.Message) result=$out fail=$failPath" | Out-Null } catch { } }
+    try { Write-SupervisorHeartbeat $paths.state_root $watcherId "error" @{ trigger=$triggerName; mode=$mode; result_path=$out; fail_path=$failPath; error=$($err.Exception.Message) } | Out-Null } catch { }
     exit 1
 }
