@@ -221,17 +221,16 @@ function Stop-WatcherByHeartbeat($hbObj) {
         return
     }
 
-    # Best-effort graceful stop (Ctrl+C is not feasible); use Stop-Process.
-    Write-Log "Stopping watcher pid=$watcherpid ..."
-    Stop-Process -Id $watcherpid -Force -ErrorAction Stop
+    # Stop the *entire process tree* rooted at the heartbeat PID.
+    # This is required on Windows when venv python spawns a child base-python process.
+    Write-Log "Stopping watcher process tree rooted at pid=$watcherpid ..."
+    & taskkill.exe /PID $watcherpid /T /F | Out-Null
 
     Start-Sleep -Seconds 2
 
     $p2 = Get-Process -Id $watcherpid -ErrorAction SilentlyContinue
-    if ($null -ne $p2) {
-        throw "Failed to stop watcher pid=$watcherpid"
-    }
-    Write-Log "Watcher stopped."
+    if ($null -ne $p2) { throw "Failed to stop watcher pid=$watcherpid (still running)" }
+    Write-Log "Watcher stopped (tree kill)."
 }
 
 function Git-PullRebase([string]$repoRoot) {
