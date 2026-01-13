@@ -17,6 +17,12 @@ function Write-Log([string]$msg) {
     Write-Host "[$ts] $msg"
 }
 
+function New-TempFilePath([string]$prefix, [string]$suffix) {
+    $ts = (Get-Date).ToUniversalTime().ToString("yyyyMMddTHHmmssZ")
+    $rand = [Guid]::NewGuid().ToString("N")
+    return (Join-Path $env:TEMP "$prefix.$ts.$rand$suffix")
+}
+
 function Get-RepoRoot {
     # This script lives in scripts\ops\; repo root is two levels up
     return (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
@@ -48,15 +54,22 @@ function Get-HjbPathsFromConfig([string]$repoRoot, [string]$py) {
     }
     $watcherId = $watcherId.Trim()
 
-    # Python snippet prints a single JSON line with: state_root, flags_root, heartbeat_path
-    $pyCode = @"
+    # Robust config parsing: write a temporary helper Python file and execute it.
+    # Avoids fragile quoting issues with `python -c` under PowerShell/Task Scheduler.
+    $helperPath = New-TempFilePath "hjb_parse_config" ".py"
+
+    $helperCode = @'
 import json
 from pathlib import Path
 import yaml
-cfg_path = Path(r'''$cfgPath''')
-cfg = yaml.safe_load(cfg_path.read_text(encoding='utf-8')) or {}
-paths = cfg.get('paths') if isinstance(cfg.get('paths'), dict) else {}
-def pick(key):
+
+def load_cfg(p: Path) -> dict:
+    data = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
+    if not isinstance(data, dict):
+        raise SystemExit(f"Config must be a mapping/dict: {p}")
+    return data
+
+def pick(cfg: dict, paths: dict, key: str):
     v = paths.get(key)
     if isinstance(v, str) and v.strip():
         return v.strip()
@@ -65,30 +78,67 @@ def pick(key):
         return v2.strip()
     return None
 
-state_root_s = pick('state_root')
-if not state_root_s:
-    raise SystemExit("Missing state_root (expected cfg.paths.state_root or cfg.state_root)")
-state_root = Path(state_root_s)
+def main():
+    cfg_path = Path(r"{CFG_PATH}")
+    watcher_id = r"{WATCHER_ID}"
 
-flags_root_s = pick('flags_root') or str(state_root / 'flags')
-flags_root = Path(flags_root_s)
+    cfg = load_cfg(cfg_path)
+    paths = cfg.get("paths") if isinstance(cfg.get("paths"), dict) else {}
 
-watcher_id = r'''$watcherId'''
-if watcher_id == 'orionmx_1':
-    hb = state_root / 'watcher_heartbeat.json'
-else:
-    hb = state_root / f'watcher_heartbeat_{watcher_id}.json'
+    state_root_s = pick(cfg, paths, "state_root")
+    if not state_root_s:
+        raise SystemExit("Missing state_root (expected cfg.paths.state_root or cfg.state_root)")
+    state_root = Path(state_root_s)
 
-print(json.dumps({
-    "state_root": str(state_root),
-    "flags_root": str(flags_root),
-    "heartbeat_path": str(hb),
-    "watcher_id": watcher_id,
-}, ensure_ascii=False))
-"@
+    flags_root_s = pick(cfg, paths, "flags_root") or str(state_root / "flags")
+    flags_root = Path(flags_root_s)
 
-    $jsonLine = & $py -c $pyCode
-    if ($LASTEXITCODE -ne 0) { throw "Failed to parse config via python." }
+    # Heartbeat naming convention matches watcher
+    if watcher_id == "orionmx_1":
+        hb = state_root / "watcher_heartbeat.json"
+    else:
+        hb = state_root / f"watcher_heartbeat_{watcher_id}.json"
+
+    # Also expose scratch_root (useful for future supervisor actions; tolerant to current config shape)
+    scratch_root = None
+    scratch = cfg.get("scratch")
+    if isinstance(scratch, dict):
+        v = scratch.get("root")
+        if isinstance(v, str) and v.strip():
+            scratch_root = v.strip()
+    if not scratch_root:
+        v2 = cfg.get("scratch_root")
+        if isinstance(v2, str) and v2.strip():
+            scratch_root = v2.strip()
+    if not scratch_root:
+        v3 = paths.get("scratch_root")
+        if isinstance(v3, str) and v3.strip():
+            scratch_root = v3.strip()
+
+    print(json.dumps({
+        "config_path": str(cfg_path),
+        "state_root": str(state_root),
+        "flags_root": str(flags_root),
+        "heartbeat_path": str(hb),
+        "watcher_id": watcher_id,
+        "scratch_root": scratch_root,
+    }, ensure_ascii=False))
+    return 0
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+'@
+
+    $cfgEsc = $cfgPath.Replace("\", "\\")
+    $widEsc = $watcherId.Replace("\", "\\")
+    $helperCode = $helperCode.Replace("{CFG_PATH}", $cfgEsc).Replace("{WATCHER_ID}", $widEsc)
+    Set-Content -LiteralPath $helperPath -Value $helperCode -Encoding UTF8
+
+    $jsonLine = & $py $helperPath
+    $exit = $LASTEXITCODE
+    Remove-Item -LiteralPath $helperPath -Force -ErrorAction SilentlyContinue
+
+    if ($exit -ne 0) { throw "Failed to parse config via python helper. ExitCode=$exit" }
 
     return ($jsonLine | ConvertFrom-Json)
 }
