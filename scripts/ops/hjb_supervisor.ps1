@@ -157,26 +157,26 @@ function Stop-WatcherByHeartbeat($hbObj) {
     if ($null -eq $hbObj) { throw "Heartbeat not found or unreadable; cannot stop watcher safely." }
     if ($null -eq $hbObj.pid) { throw "Heartbeat missing pid; cannot stop watcher safely." }
 
-    $pid = [int]$hbObj.pid
-    $host = $hbObj.hostname
+    $watcherpid = [int]$hbObj.pid
+    $hostname = $hbObj.hostname
 
-    Write-Log "Heartbeat indicates watcher pid=$pid hostname=$host watcher_id=$($hbObj.watcher_id)"
+    Write-Log "Heartbeat indicates watcher pid=$watcherpid hostname=$hostname watcher_id=$($hbObj.watcher_id)"
 
-    $p = Get-Process -Id $pid -ErrorAction SilentlyContinue
+    $p = Get-Process -Id $watcherpid -ErrorAction SilentlyContinue
     if ($null -eq $p) {
-        Write-Log "No process with pid=$pid is running. Treating as already stopped."
+        Write-Log "No process with pid=$watcherpid is running. Treating as already stopped."
         return
     }
 
     # Best-effort graceful stop (Ctrl+C is not feasible); use Stop-Process.
-    Write-Log "Stopping watcher pid=$pid ..."
-    Stop-Process -Id $pid -Force -ErrorAction Stop
+    Write-Log "Stopping watcher pid=$watcherpid ..."
+    Stop-Process -Id $watcherpid -Force -ErrorAction Stop
 
     Start-Sleep -Seconds 2
 
-    $p2 = Get-Process -Id $pid -ErrorAction SilentlyContinue
+    $p2 = Get-Process -Id $watcherpid -ErrorAction SilentlyContinue
     if ($null -ne $p2) {
-        throw "Failed to stop watcher pid=$pid"
+        throw "Failed to stop watcher pid=$watcherpid"
     }
     Write-Log "Watcher stopped."
 }
