@@ -91,10 +91,26 @@ def atomic_rename(src: Path, dst: Path) -> bool:
 
 def write_json(path: Path, payload: Dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
-    tmp.replace(path)
-
+    # Use a unique temp name to avoid SMB/AV/file-indexer collisions.
+    # Also retry briefly because NAS writes can be transiently locked.
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.{int(time.time()*1000)}.tmp")
+    txt = json.dumps(payload, indent=2, sort_keys=True)
+    for attempt in range(1, 6):
+        try:
+            tmp.write_text(txt, encoding="utf-8")
+            tmp.replace(path)
+            return
+        except PermissionError:
+            # Back off and retry (common on SMB shares)
+            time.sleep(0.15 * attempt)
+        finally:
+            try:
+                if tmp.exists():
+                    tmp.unlink()
+            except Exception:
+                pass
+    # If we get here, we failed after retries.
+    raise PermissionError(f"Failed to write JSON (retries exhausted): {path}")
 
 def heartbeat_path(state_root: Path, watcher_id: str) -> Path:
     # Keep OrionMX canonical heartbeat filename if watcher_id is orionmx_1, else unique file.
@@ -434,6 +450,9 @@ def run_once(
         "watcher_id": watcher_id,
         "hostname": socket.gethostname(),
         "pid": os.getpid(),
+        "ppid": os.getppid(),
+        "executable": sys.executable,
+        "argv": sys.argv,
         "utc": utc_now_iso(),
         "mode": "success_v0",
         "poll_seconds": poll_seconds,
