@@ -146,13 +146,33 @@ def acquire_single_instance_lock(state_root: Path, watcher_id: str) -> Path:
             "watcher_id": watcher_id,
             "hostname": socket.gethostname(),
             "pid": os.getpid(),
-            "utc": utc_now_iso(),
+            "utc_started": utc_now_iso(),
+            "utc_last_seen": utc_now_iso(),
         }
         owner_path.write_text(json.dumps(owner, indent=2, sort_keys=True), encoding="utf-8")
     except Exception:
         pass
 
     return lock_dir
+
+def update_lock_owner(lock_dir: Path, watcher_id: str) -> None:
+    """
+    Best-effort liveness update under the lock directory.
+    This gives the supervisor a reliable PID even if heartbeat writes are flaky.
+    """
+    try:
+        owner_path = lock_dir / "owner.json"
+        owner = {
+            "watcher_id": watcher_id,
+            "hostname": socket.gethostname(),
+            "pid": os.getpid(),
+            "ppid": os.getppid(),
+            "executable": sys.executable,
+            "utc_last_seen": utc_now_iso(),
+        }
+        owner_path.write_text(json.dumps(owner, indent=2, sort_keys=True), encoding="utf-8")
+    except Exception:
+        pass
 
 def release_single_instance_lock(lock_dir: Optional[Path]) -> None:
     if not lock_dir:
@@ -458,8 +478,12 @@ def run_once(
         "poll_seconds": poll_seconds,
         "status": "running",
     }
-    write_json(hb, hb_payload)
-
+    try:
+        write_json(hb, hb_payload)
+    except Exception:
+        # Heartbeat is informational; do not crash if SMB transiently locks the file.
+        pass
+        
     # ------------------------------------------------------------
     # Manifest-driven JSON flags (one per cycle)
     # Convention: any *.json in flags/pending is treated as a task manifest.
@@ -670,6 +694,8 @@ def main() -> int:
 
     try:
         while True:
+            if lock_dir is not None:
+                update_lock_owner(lock_dir, watcher_id)
             run_once(
                 watcher_id=watcher_id,
                 state_root=paths["state_root"],
