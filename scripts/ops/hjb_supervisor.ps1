@@ -206,6 +206,32 @@ function Read-Heartbeat([string]$heartbeatPath) {
     }
 }
 
+function Read-LockOwner([string]$stateRoot, [string]$watcherId) {
+    $lockDir = Join-Path (Join-Path $stateRoot "locks") ("watcher_{0}.lock" -f $watcherId)
+    $ownerPath = Join-Path $lockDir "owner.json"
+    if (!(Test-Path $ownerPath)) { return $null }
+    try {
+        $txt = Get-Content -LiteralPath $ownerPath -Raw -ErrorAction Stop
+        return ($txt | ConvertFrom-Json)
+    } catch {
+        return $null
+    }
+}
+
+function Stop-ProcessTree([int]$rootPid, [string]$label) {
+    $p = Get-Process -Id $rootPid -ErrorAction SilentlyContinue
+    if ($null -eq $p) {
+        Write-Log "$label: No process with pid=$rootPid is running. Treating as already stopped."
+        return
+    }
+    Write-Log "$label: Stopping process tree rooted at pid=$rootPid ..."
+    & taskkill.exe /PID $rootPid /T /F | Out-Null
+    Start-Sleep -Seconds 2
+    $p2 = Get-Process -Id $rootPid -ErrorAction SilentlyContinue
+    if ($null -ne $p2) { throw "$label: Failed to stop pid=$rootPid (still running)" }
+    Write-Log "$label: Stopped."
+}
+
 function Stop-WatcherByHeartbeat($hbObj) {
     if ($null -eq $hbObj) { throw "Heartbeat not found or unreadable; cannot stop watcher safely." }
     if ($null -eq $hbObj.pid) { throw "Heartbeat missing pid; cannot stop watcher safely." }
@@ -215,22 +241,7 @@ function Stop-WatcherByHeartbeat($hbObj) {
 
     Write-Log "Heartbeat indicates watcher pid=$watcherpid hostname=$hostname watcher_id=$($hbObj.watcher_id)"
 
-    $p = Get-Process -Id $watcherpid -ErrorAction SilentlyContinue
-    if ($null -eq $p) {
-        Write-Log "No process with pid=$watcherpid is running. Treating as already stopped."
-        return
-    }
-
-    # Stop the *entire process tree* rooted at the heartbeat PID.
-    # This is required on Windows when venv python spawns a child base-python process.
-    Write-Log "Stopping watcher process tree rooted at pid=$watcherpid ..."
-    & taskkill.exe /PID $watcherpid /T /F | Out-Null
-
-    Start-Sleep -Seconds 2
-
-    $p2 = Get-Process -Id $watcherpid -ErrorAction SilentlyContinue
-    if ($null -ne $p2) { throw "Failed to stop watcher pid=$watcherpid (still running)" }
-    Write-Log "Watcher stopped (tree kill)."
+    Stop-ProcessTree $watcherpid "Heartbeat stop"
 }
 
 function Git-PullRebase([string]$repoRoot) {
@@ -292,18 +303,18 @@ function Start-WatcherViaWrapper([string]$repoRoot) {
     Write-Log "Watcher start requested."
 }
 
-function Write-ResultJson([string]$flagsRoot, [string]$status, [hashtable]$data) {
+function Write-ResultJson([string]$flagsRoot, [string]$bucket, [string]$status, [hashtable]$data) {
     $ts = (Get-Date).ToUniversalTime().ToString("yyyyMMddTHHmmssZ")
     $computerName = $env:COMPUTERNAME
 
     if ($status -eq "ok") {
-        $outDir = Join-Path $flagsRoot "completed\ops_update_watcher"
+        $outDir = Join-Path $flagsRoot ("completed\{0}" -f $bucket)
         New-Item -ItemType Directory -Force -Path $outDir | Out-Null
-        $outPath = Join-Path $outDir "ops_update_watcher.$computerName.$ts.result.json"
+        $outPath = Join-Path $outDir ("{0}.{1}.{2}.result.json" -f $bucket, $computerName, $ts)
     } else {
-        $outDir = Join-Path $flagsRoot "failed\ops_update_watcher"
+        $outDir = Join-Path $flagsRoot ("failed\{0}" -f $bucket)
         New-Item -ItemType Directory -Force -Path $outDir | Out-Null
-        $outPath = Join-Path $outDir "ops_update_watcher.$computerName.$ts.error.json"
+        $outPath = Join-Path $outDir ("{0}.{1}.{2}.error.json" -f $bucket, $computerName, $ts)
     }
 
     $payload = @{
@@ -406,8 +417,33 @@ if ($superLog) { try { Write-SupervisorLog $logsRoot $watcherId "Claimed trigger
 try {
     $hb = Read-Heartbeat $paths.heartbeat_path
     # If watcher appears healthy and this is a restart-only trigger, we still honor the trigger.
-    Stop-WatcherByHeartbeat $hb
- 
+    # But: do not trust a stale heartbeat PID; fall back to lock owner.
+    $poll = 30
+    if ($hb -and $hb.poll_seconds) { $poll = [int]$hb.poll_seconds }
+    $fresh = Get-HeartbeatFreshness $hb $poll
+
+    $stopped = $false
+    if ($hb -and $fresh.fresh) {
+        try {
+            Stop-WatcherByHeartbeat $hb
+            $stopped = $true
+        } catch {
+            Write-Log "Heartbeat stop failed: $($_.Exception.Message)"
+        }
+    } else {
+        Write-Log "Heartbeat missing/stale (age=$($fresh.age_seconds)). Will try lock owner."
+    }
+
+    if (-not $stopped) {
+        $owner = Read-LockOwner $paths.state_root $watcherId
+        if ($owner -and $owner.pid) {
+            Stop-ProcessTree ([int]$owner.pid) "Lock-owner stop"
+            $stopped = $true
+        } else {
+            throw "Cannot stop watcher: no fresh heartbeat PID and no lock owner PID available."
+        }
+    } 
+
     if ($mode -eq "update") {
         Git-PullRebase $repoRoot
     } else {
@@ -425,7 +461,7 @@ try {
     $donePath = Join-Path $doneDir "$triggerName.$computerName.done"
     Move-Item -LiteralPath $claim -Destination $donePath -Force
 
-    $out = Write-ResultJson $flagsRoot "ok" @{
+    $out = Write-ResultJson $flagsRoot $bucket "ok" @{
         heartbeat_path = $paths.heartbeat_path
         repo_root = $repoRoot
         trigger = $triggerName
@@ -446,7 +482,7 @@ catch {
     $failPath = Join-Path $failDir "$triggerName.$computerName.failed"
     try { Move-Item -LiteralPath $claim -Destination $failPath -Force } catch { }
 
-    $out = Write-ResultJson $flagsRoot "error" @{
+    $out = Write-ResultJson $flagsRoot $bucket "error" @{
         heartbeat_path = $paths.heartbeat_path
         repo_root = $repoRoot
         trigger = $triggerName
