@@ -221,15 +221,15 @@ function Read-LockOwner([string]$stateRoot, [string]$watcherId) {
 function Stop-ProcessTree([int]$rootPid, [string]$label) {
     $p = Get-Process -Id $rootPid -ErrorAction SilentlyContinue
     if ($null -eq $p) {
-        Write-Log "$label: No process with pid=$rootPid is running. Treating as already stopped."
+        Write-Log "${label}: No process with pid=$rootPid is running. Treating as already stopped."
         return
     }
-    Write-Log "$label: Stopping process tree rooted at pid=$rootPid ..."
+    Write-Log "${label}: Stopping process tree rooted at pid=$rootPid ..."
     & taskkill.exe /PID $rootPid /T /F | Out-Null
     Start-Sleep -Seconds 2
     $p2 = Get-Process -Id $rootPid -ErrorAction SilentlyContinue
-    if ($null -ne $p2) { throw "$label: Failed to stop pid=$rootPid (still running)" }
-    Write-Log "$label: Stopped."
+    if ($null -ne $p2) { throw "${label}: Failed to stop pid=$rootPid (still running)" }
+    Write-Log "${label}: Stopped."
 }
 
 function Stop-WatcherByHeartbeat($hbObj) {
