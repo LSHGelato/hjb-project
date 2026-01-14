@@ -19,14 +19,14 @@ if ([string]::IsNullOrWhiteSpace($Poll)) { $Poll = "30" }
 Set-Location $RepoRoot
 
 # ------------------------------------------------------------------
-# Duplicate-start guard (operator ergonomics):
-# If *any* hjb_watcher.py is already running for this watcher_id,
-# refuse to start a new one.
+# Duplicate-start guard (operator ergonomics only):
+# If a watcher appears to already be running, refuse to start another.
+# Correctness is enforced by the NAS lock in hjb_watcher.py.
 # ------------------------------------------------------------------
+$wid = [Regex]::Escape($WatcherId)
 $existing = Get-CimInstance Win32_Process |
     Where-Object {
-        $_.CommandLine -match "scripts\\watcher\\hjb_watcher\.py" -and
-        $_.CommandLine -match [Regex]::Escape($WatcherId)
+        ($_.CommandLine -and ($_.CommandLine -match "hjb_watcher\.py") -and ($_.CommandLine -match $wid))
     } |
     Select-Object -First 1
 
@@ -35,4 +35,4 @@ if ($existing) {
     exit 0
 }
 
-+& $Py -u $Watcher --watcher-id $WatcherId --continuous --poll-seconds $Poll
+& $Py -u $Watcher --watcher-id $WatcherId --continuous --poll-seconds $Poll
