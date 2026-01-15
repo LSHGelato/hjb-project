@@ -495,15 +495,12 @@ try {
             Stop-ProcessTree ([int]$owner.pid) "Lock-owner stop"
             $stopped = $true
         } else {
-            if ($mode -eq "restart") {
-                Write-Log "No running watcher found to stop (no fresh heartbeat, no lock owner). Continuing with restart/start."
-            } else {
-                throw "Cannot stop watcher: no fresh heartbeat PID and no lock owner PID available."
-            }
-        }
-    }
+            # IMPORTANT: For BOTH restart and update, we continue even if nothing is running.
+            # (Update should still pull/rebase, then start watcher.)
+            Write-Log "No running watcher found to stop (no fresh heartbeat, no lock owner). Continuing with $mode."
 
-    # Always clear stale locks before attempting restart
+    # Always clear stale locks before attempting start.
+    # This must be inside the try-block so failures are logged/recorded and do not get skipped.
     Remove-StaleWatcherLock $paths.state_root $watcherId | Out-Null
 
     if ($mode -eq "update") {
