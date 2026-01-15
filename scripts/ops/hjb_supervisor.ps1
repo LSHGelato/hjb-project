@@ -244,6 +244,59 @@ function Stop-WatcherByHeartbeat($hbObj) {
     Stop-ProcessTree $watcherpid "Heartbeat stop"
 }
 
+function Get-WatcherLockDir([string]$stateRoot, [string]$watcherId) {
+    $locksRoot = Join-Path $stateRoot "locks"
+    return (Join-Path $locksRoot ("watcher_{0}.lock" -f $watcherId))
+}
+
+function Remove-StaleWatcherLock([string]$stateRoot, [string]$watcherId) {
+    $lockDir = Get-WatcherLockDir $stateRoot $watcherId
+    if (!(Test-Path $lockDir)) { return $false }
+    try {
+        $owner = Join-Path $lockDir "owner.json"
+        if (Test-Path $owner) { Remove-Item -LiteralPath $owner -Force -ErrorAction SilentlyContinue }
+        Remove-Item -LiteralPath $lockDir -Force -Recurse -ErrorAction Stop
+        Write-Log "Removed stale watcher lock: $lockDir"
+        return $true
+    } catch {
+        Write-Log "Failed to remove watcher lock $lockDir : $($_.Exception.Message)"
+        return $false
+    }
+}
+
+function Start-WatcherDirect([string]$repoRoot, [string]$py, [string]$watcherId, [int]$pollSeconds, [string]$logsRoot) {
+    $watcher = Join-Path $repoRoot "scripts\watcher\hjb_watcher.py"
+    if (!(Test-Path $watcher)) { throw "Watcher script missing: $watcher" }
+
+    # Log files on NAS so hidden/background failures are visible.
+    $wlogDir = Join-Path $logsRoot "watcher"
+    Ensure-Dir $wlogDir
+    $outLog = Join-Path $wlogDir ("watcher_{0}.out.log" -f $watcherId)
+    $errLog = Join-Path $wlogDir ("watcher_{0}.err.log" -f $watcherId)
+
+    $args = @(
+        "-u", $watcher,
+        "--watcher-id", $watcherId,
+        "--continuous",
+        "--poll-seconds", "$pollSeconds"
+    )
+
+    Write-Log "Starting watcher (direct): $py $($args -join ' ')"
+    Start-Process -FilePath $py -ArgumentList $args -WorkingDirectory $repoRoot `
+        -WindowStyle Hidden -RedirectStandardOutput $outLog -RedirectStandardError $errLog | Out-Null
+}
+
+function Assert-WatcherRestarted([string]$heartbeatPath, [int]$pollSeconds) {
+    Start-Sleep -Seconds ([Math]::Max(3, [Math]::Min(10, $pollSeconds)))
+    $hb = Read-Heartbeat $heartbeatPath
+    $fresh = Get-HeartbeatFreshness $hb $pollSeconds
+    if (-not $fresh.fresh) {
+        $age = $fresh.age_seconds
+        throw "Watcher restart verification FAILED: heartbeat stale/missing (age_seconds=$age) at $heartbeatPath"
+    }
+    Write-Log "Watcher restart verified: heartbeat fresh (age=$($fresh.age_seconds)s)."
+}
+
 function Git-PullRebase([string]$repoRoot) {
     Write-Log "Running git pull --rebase origin main ..."
     & git -C $repoRoot fetch origin
@@ -426,6 +479,8 @@ try {
     if ($hb -and $fresh.fresh) {
         try {
             Stop-WatcherByHeartbeat $hb
+            # If lock dir exists but the watcher PID is now gone, it's stale—remove it.
+            Remove-StaleWatcherLock $paths.state_root $watcherId | Out-Null
             $stopped = $true
         } catch {
             Write-Log "Heartbeat stop failed: $($_.Exception.Message)"
@@ -452,7 +507,12 @@ try {
 
     Run-DoctorIfPresent $repoRoot $py
 
-    Start-WatcherViaWrapper $repoRoot
+    # Start watcher directly (more reliable than hidden wrapper) and verify heartbeat advances.
+    $poll = 30
+    $envPoll = $env:HJB_POLL_SECONDS
+    if (![string]::IsNullOrWhiteSpace($envPoll)) { $poll = [int]$envPoll }
+    Start-WatcherDirect $repoRoot $py $watcherId $poll $logsRoot
+    Assert-WatcherRestarted $paths.heartbeat_path $poll
 
     # Mark trigger as done
     $bucket = if ($mode -eq "update") { "ops_update_watcher" } else { "ops_restart_watcher" }
