@@ -495,9 +495,16 @@ try {
             Stop-ProcessTree ([int]$owner.pid) "Lock-owner stop"
             $stopped = $true
         } else {
-            throw "Cannot stop watcher: no fresh heartbeat PID and no lock owner PID available."
+            if ($mode -eq "restart") {
+                Write-Log "No running watcher found to stop (no fresh heartbeat, no lock owner). Continuing with restart/start."
+            } else {
+                throw "Cannot stop watcher: no fresh heartbeat PID and no lock owner PID available."
+            }
         }
-    } 
+    }
+
+    # Always clear stale locks before attempting restart
+    Remove-StaleWatcherLock $paths.state_root $watcherId | Out-Null
 
     if ($mode -eq "update") {
         Git-PullRebase $repoRoot
