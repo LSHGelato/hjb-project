@@ -271,6 +271,9 @@ def execute_manifest_task(
     if task_type == "stage1.inventory":
         return task_stage1_inventory(manifest, task_id, flags_root)
 
+    if task_type == "stage1.ia_download":
+        return task_stage1_ia_download(manifest, task_id, flags_root)
+    
     raise ValueError(f"Unknown task_type: {task_type}")
 
 
@@ -438,6 +441,61 @@ def task_stage1_inventory(manifest: Dict[str, Any], task_id: str, flags_root: Pa
         "max_seconds": max_seconds,
         "stopped_reason": stopped_reason,
         "elapsed_seconds": int(time.monotonic() - started),
+    }
+
+import subprocess
+
+def task_stage1_ia_download(manifest: Dict[str, Any], task_id: str, flags_root: Path) -> Tuple[List[str], Dict[str, Any]]:
+    payload = manifest.get("payload") or {}
+    if not isinstance(payload, dict):
+        raise ValueError("payload must be an object (dict)")
+
+    list_file = payload.get("list_file")
+    if not (isinstance(list_file, str) and list_file.strip()):
+        raise KeyError("payload.list_file must be a string path")
+
+    output_root = payload.get("output_root")
+    include_ocr = bool(payload.get("include_ocr", False))
+    max_items = int(payload.get("max_items", 0) or 0)
+    dry_run = bool(payload.get("dry_run", False))
+
+    repo_root = Path(__file__).resolve().parents[2]
+    script = repo_root / "scripts" / "stage1" / "ia_acquire.py"
+    if not script.is_file():
+        raise FileNotFoundError(f"Missing acquisition script: {script}")
+
+    args = [sys.executable, str(script), "--list-file", str(list_file)]
+    if isinstance(output_root, str) and output_root.strip():
+        args += ["--output-root", output_root.strip()]
+    if include_ocr:
+        args.append("--include-ocr")
+    if max_items > 0:
+        args += ["--max-items", str(max_items)]
+    if dry_run:
+        args.append("--dry-run")
+
+    # Run in repo root so relative paths behave
+    proc = subprocess.run(args, cwd=str(repo_root), capture_output=True, text=True)
+
+    # Store stdout/stderr into completed folder for auditability
+    outdir = (flags_root / "completed" / task_id / "stage1_ia_download")
+    outdir.mkdir(parents=True, exist_ok=True)
+    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    stdout_path = outdir / f"ia_acquire_{task_id}_{ts}.stdout.txt"
+    stderr_path = outdir / f"ia_acquire_{task_id}_{ts}.stderr.txt"
+    stdout_path.write_text(proc.stdout or "", encoding="utf-8")
+    stderr_path.write_text(proc.stderr or "", encoding="utf-8")
+
+    if proc.returncode != 0:
+        raise RuntimeError(f"ia_acquire failed (exit={proc.returncode}). See: {stdout_path} / {stderr_path}")
+
+    return [str(stdout_path), str(stderr_path)], {
+        "include_ocr": include_ocr,
+        "max_items": max_items,
+        "dry_run": dry_run,
+        "list_file": list_file,
+        "output_root": output_root,
+        "exit_code": proc.returncode,
     }
 
 def run_once(
