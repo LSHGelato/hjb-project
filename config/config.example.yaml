@@ -1,129 +1,522 @@
-# HJB Project Configuration (TEMPLATE)
-# Copy to config.yaml for local use. Do not commit config.yaml.
-# This template is aligned to Blueprint v2.4.
+# Historical Journals & Books (HJB) Project Configuration
+# Copy this file to config.yaml and update values for your environment.
+# IMPORTANT: Never commit actual config.yaml with secrets to Git; use environment variables for sensitive data.
+# See: .env.example for credential management patterns.
 
-project:
-  name: "Historical Journals & Books Project"
-  environment: "dev"              # dev | prod
-  timezone: "America/New_York"
+################################################################################
+# SYSTEM PATHS & STORAGE
+################################################################################
 
-paths:
-  # UNC base paths (preferred). Use drive letters only if you must.
-  nas_root: "\\\\RaneyHQ\\Michael"
+storage:
+  # NAS paths (network share on Synology RaneyHQ)
+  # All paths use UNC notation for cross-platform compatibility
+  nas_root: "\\\\RaneyHQ\\Michael\\02_Projects\\Historical_Journals_And_Books"
+  
+  raw_input: "\\\\RaneyHQ\\Michael\\02_Projects\\Historical_Journals_And_Books\\Raw_Input"
+  working_files: "\\\\RaneyHQ\\Michael\\02_Projects\\Historical_Journals_And_Books\\Working_Files"
+  reference_library: "\\\\RaneyHQ\\Michael\\02_Projects\\Historical_Journals_And_Books\\Reference_Library"
+  
+  # Local scratch disk on processing machines (for temp files during OCR, etc.)
+  # On OrionMX: C:\Scratch (SSD for speed)
+  # On OrionMega: may vary; set per-machine
+  local_scratch: "C:\\Scratch"
+  
+  # Subdirectories within working_files (created/managed by pipeline)
+  state_dir: "0200_STATE"
+  flags_dir: "flags"
+  logs_dir: "logs"
+  preprocessing_dir: "0210_Preprocessing"
+  page_packs_dir: "0220_Page_Packs"
+  segmentation_dir: "0230_Segmentation"
+  canonicalization_dir: "0240_Canonicalization"
+  export_dir: "0250_Export"
+  archive_dir: "0290_Archive"
 
-  # Four-layer model roots
-  raw_root: "\\\\RaneyHQ\\Michael\\01_Research\\Historical_Journals_Inputs"
-  working_root: "\\\\RaneyHQ\\Michael\\02_Projects\\Historical_Journals_Pipeline"
-  reference_root: "\\\\RaneyHQ\\Michael\\05_Reference\\Historical_Journals_Library"
+  # Raw input subdirectories
+  raw_state_dir: "0100_STATE"
+  raw_internet_archive: "0110_Internet_Archive"
+  raw_hathi_trust: "0120_HathiTrust"
+  raw_usmodernist: "0130_USModernist"
+  raw_university_collections: "0140_University_Collections"
+  raw_local_scans: "0150_Local_Scans"
+  raw_external_datasets: "0160_External_Datasets"
+  raw_quarantine: "0180_Quarantine"
 
-  # Working-layer orchestration
-  state_root: "\\\\RaneyHQ\\Michael\\02_Projects\\Historical_Journals_Pipeline\\0200_STATE"
-  flags_root: "\\\\RaneyHQ\\Michael\\02_Projects\\Historical_Journals_Pipeline\\0200_STATE\\flags"
-  logs_root: "\\\\RaneyHQ\\Michael\\02_Projects\\Historical_Journals_Pipeline\\0200_STATE\\logs"
-  scheduled_root: "\\\\RaneyHQ\\Michael\\02_Projects\\Historical_Journals_Pipeline\\0200_STATE\\scheduled"
-
-# Optional: local scratch (recommended for temp / high-IO work)
-# On OrionMX, set this to your NVMe scratch disk (per your standard).
-scratch_root: "C:\\Scratch\\NVMe"
-
-watcher:
-  mode: "continuous"              # continuous | opportunistic
-  watcher_id: "orionmx_1"
-  poll_interval_seconds: 30       # continuous typically 30; opportunistic typically 10
-  heartbeat_filename: "watcher_heartbeat.json"
-
-  # Priority behavior
-  priority_filter:
-    enabled: false                # opportunistic typically true
-    allowed: ["high", "normal"]   # used when enabled=true
-
-  # Task claiming directories (relative to flags_root)
-  queue_dirs:
-    pending: "pending"
-    processing: "processing"
-    completed: "completed"
-    failed: "failed"
-
-logging:
-  level: "INFO"                   # DEBUG | INFO | WARNING | ERROR
-  daily_log_filename_pattern: "{date}_processing.log"  # date = YYYY-MM-DD
-  also_print_to_console: true
+################################################################################
+# DATABASE CONFIGURATION
+################################################################################
 
 database:
-  # HostGator MySQL (Published layer)
-  enabled: true
-  host: "example.hostgator.mysql"         # set to real host
+  # MySQL connection settings (HostGator shared hosting)
+  host: "raneywor.hosting.mysql.database.com"
   port: 3306
-  name: "hjb"
-  user: "hjb_user"
-
-  # Prefer environment variable injection for secrets in production.
-  # If you do not use env vars, place the password only in config.yaml (never committed).
+  database: "raneywor_hjbproject"
+  
+  # Username: use environment variables for credentials!
+  # Set HJB_MYSQL_USER and HJB_MYSQL_PASSWORD in .env or system env vars
+  user_env_var: "HJB_MYSQL_USER"
   password_env_var: "HJB_MYSQL_PASSWORD"
-  password: ""                            # optional fallback; keep empty in template
+  
+  # For local development (do NOT use in production):
+  # user: "dev_user"
+  # password: "dev_password"
+  
+  # Connection pool settings
+  pool_size: 5
+  max_overflow: 10
+  pool_timeout: 30
+  pool_recycle: 3600  # Recycle connections every hour
+  
+  # Enable/disable database operations (useful for testing or if DB is down)
+  enabled: true
+  
+  # If database is unavailable, queue operations for later sync
+  queue_offline_operations: true
+  offline_queue_file: "0200_STATE\\database_queue.jsonl"
+  
+  # Schema versioning
+  schema_version_table: "schema_migrations"
 
-  # Optional TLS settings (if available/required)
-  tls:
-    enabled: false
-    ca_cert_path: ""                      # e.g., "C:\\certs\\ca.pem"
+################################################################################
+# MEDIAWIKI INTEGRATION
+################################################################################
 
 mediawiki:
-  enabled: false
-  api_url: "https://example.com/wiki/api.php"
-  username: "WikiBot"
-  password_env_var: "HJB_WIKI_PASSWORD"
-  password: ""                            # optional fallback; keep empty in template
+  # MediaWiki API endpoint on HostGator
+  api_url: "https://your-wiki-domain.com/api.php"
+  
+  # Bot account credentials (use environment variables)
+  bot_user_env_var: "HJB_WIKI_USER"
+  bot_password_env_var: "HJB_WIKI_PASSWORD"
+  
+  # API rate limiting
+  rate_limit_calls: 10
+  rate_limit_seconds: 1
+  retry_attempts: 3
+  retry_backoff_base: 2  # exponential backoff: 2^n seconds
+  
+  # Page creation settings
+  edit_summary: "HJB Pipeline: Auto-generated from processed archive"
+  namespace_prefix: "File"  # For uploaded media
+  
+  # Template settings
+  templates:
+    journal_article: "Template:JournalArticle"
+    advertisement: "Template:Advertisement"
+    book_chapter: "Template:BookChapter"
+    book_toc: "Template:BookTOC"
+    issue_index: "Template:IssueIndex"
+  
+  # Category tagging
+  enable_categories: true
+  category_by_year: true
+  category_by_publication: true
+  category_by_volume: true
+
+################################################################################
+# CONTENT SOURCES
+################################################################################
 
 sources:
+  # Internet Archive (IA)
   internet_archive:
     enabled: true
-    # Where Stage 1 places IA downloads within Raw layer
-    raw_subdir: "0110_Internet_Archive"
-    # Collection organization examples: SIM vs Other
-    sim_subdir: "SIM"
-    other_subdir: "Other"
-
-processing:
-  # Stage toggles (pipeline capabilities vary as you implement)
-  stage1:
+    base_url: "https://archive.org"
+    # API key (if needed; IA often doesn't require one for public access)
+    api_key_env_var: "IA_API_KEY"
+    
+    # Download preferences
+    prefer_format: "jpeg2000"  # jp2, tiff, pdf, djvu
+    download_timeout: 600  # seconds
+    retry_attempts: 3
+    
+    # Collections to ingest from
+    collections:
+      - "sim_americanarchitectureandbuildingnews"
+      - "sim_americanbuilder"
+      # Add more IA collection identifiers as needed
+    
+    # Family mapping file (CSV: IA_identifier -> publication_family_code)
+    family_mapping_file: "config\\ia_family_mapping.csv"
+  
+  # HathiTrust
+  hathi_trust:
     enabled: true
-    validate_hocr: true
-    validate_djvu: true
-    validate_scandata: true
-    page_count_checks: true
-
-  stage2:
+    base_url: "https://www.hathitrust.org/api/v1"
+    
+    # HathiTrust requires structured API calls (no simple download)
+    # For now, manual/batch downloads; future: API integration
+    download_method: "manual"  # or "api" when implemented
+    
+    # Preferred formats from Hathi
+    prefer_format: "mets_xml"  # mets_xml, alto_xml, pdf
+  
+  # USModernist Archive
+  usmodernist:
     enabled: true
-    image_preprocessing: true
-    ocr: true
-    segmentation: true
+    base_url: "https://usmodernist.org"
+    
+    # Collection categories to pull from
+    categories:
+      - "magazines"
+      - "journals"
+    
+    download_timeout: 600
+    retry_attempts: 3
+  
+  # University/Local Collections
+  university_collections:
+    enabled: true
+    # Define specific sources here as they're added
+    # Example:
+    # - name: "Harvard Widener"
+    #   base_path: "https://library.harvard.edu/..."
+    #   method: "manual"  # or "api" if available
+  
+  # Local Scans (physically scanned at local site)
+  local_scans:
+    enabled: true
+    # These are ingested directly from local directories
+    # Managed via manifest files under Raw_Input/0150_Local_Scans
 
-  stage3:
-    enabled: false
-    deduplication: false
+################################################################################
+# OCR CONFIGURATION
+################################################################################
 
-  stage4:
-    enabled: false
-    export_wiki: false
+ocr:
+  # Primary OCR engine
+  engine: "tesseract"  # Currently supports: tesseract
+  
+  # Tesseract settings
+  tesseract:
+    # Path to Tesseract executable
+    # On Windows: "C:\\Program Files\\Tesseract-OCR\\tesseract.exe"
+    executable_path: "C:\\Program Files\\Tesseract-OCR\\tesseract.exe"
+    
+    # Language data
+    languages: ["eng"]  # Can add multiple: ["eng", "fre", "ger"]
+    
+    # Performance settings
+    num_threads: 2  # Number of parallel OCR jobs
+    timeout_per_page: 120  # seconds
+    
+    # Output formats to generate
+    output_formats:
+      - "txt"    # Plain text
+      - "pdf"    # PDF with embedded text
+      - "hocr"   # hOCR format (text with coordinates)
+    
+    # Preprocessing flags
+    psm: 3  # Page segmentation mode (1-13; 3=auto, 6=uniform blocks, etc.)
+    oem: 1  # OCR engine mode (0=legacy, 1=neural, 2=both, 3=default)
+    
+    # Configuration file (if using advanced settings)
+    config_file: null  # or path to Tesseract config file
+  
+  # OCR from existing sources (IA, Hathi provide OCR)
+  reuse_source_ocr: true
+  
+  # OCR confidence thresholds
+  confidence_threshold_high: 0.85
+  confidence_threshold_medium: 0.70
+  confidence_threshold_low: 0.50
+  
+  # Flag pages below threshold for manual review
+  flag_low_confidence: true
+  low_confidence_output_dir: "0200_STATE\\ocr_flags"
 
-execution:
-  python:
-    # Optionally pin python executable paths per machine.
-    # Leave blank to use system default python in PATH.
-    python_exe: ""                          # e.g., "C:\\Python311\\python.exe"
+################################################################################
+# IMAGE PROCESSING
+################################################################################
 
-  concurrency:
-    # Keep conservative at first; increase after stability.
-    max_workers: 1
+image_processing:
+  # Preprocessing options
+  deskew: true
+  crop_borders: true
+  enhance_contrast: true
+  
+  # Binarization (black and white conversion)
+  binarize: false  # Set true if OCR engine performs better on binarized images
+  
+  # DPI normalization
+  normalize_dpi: true
+  target_dpi: 300
+  
+  # Color handling for OCR
+  convert_to_grayscale: true
+  
+  # Image format conversion
+  input_formats: ["jp2", "tiff", "jpeg", "png"]
+  conversion_target: "png"  # Format to convert to for processing
+  
+  # Quality settings for output images
+  jpeg_quality: 85
+  png_compression: 6
 
-  retries:
-    max_attempts: 3
-    backoff_seconds: 30
+################################################################################
+# SEGMENTATION CONFIGURATION
+################################################################################
 
-quality:
-  # Example OCR confidence threshold for re-OCR or review queues
-  ocr_confidence_threshold: 70
+segmentation:
+  # Segmentation method
+  method: "heuristic"  # heuristic, ml-based (future)
+  
+  # Heuristic-based settings
+  heuristic:
+    # Detect article boundaries
+    detect_headings: true
+    detect_blank_lines: true
+    
+    # Advertisement detection
+    detect_advertisements: true
+    ad_min_width_ratio: 0.8  # Ads typically span most of page width
+    
+    # Minimum content size for a work segment
+    min_chars_per_segment: 100
+    min_lines_per_segment: 3
+  
+  # Machine learning (future)
+  ml_model: null
+  # ml_model: "models/segmentation_model_v1.pkl"
 
-security:
-  # If true, scripts should refuse to run if secrets are missing when required.
-  fail_fast_on_missing_secrets: true
+################################################################################
+# DEDUPLICATION & CANONICALIZATION
+################################################################################
+
+deduplication:
+  # Text similarity threshold for merging works
+  similarity_threshold: 0.85  # 0-1, where 1 is identical
+  
+  # Method for text comparison
+  method: "fuzzy_match"  # fuzzy_match, cosine, edit_distance
+  
+  # Advertisement deduplication (via image fingerprinting)
+  image_fingerprint_method: "phash"  # perceptual hash
+  image_fingerprint_tolerance: 5  # Hamming distance for matches
+  
+  # Canonical version selection criteria
+  canonical_selection:
+    - "highest_ocr_confidence"
+    - "best_source_reputation"
+    - "earliest_publication"
+    - "most_complete"
+  
+  # Source reputation scores (for tie-breaking)
+  source_reputation:
+    "Internet Archive (LOC)": 10
+    "Internet Archive (Other)": 9
+    "HathiTrust": 9
+    "University Collections": 8
+    "Local Scans": 7
+    "USModernist": 7
+
+################################################################################
+# PUBLICATION & EXPORT
+################################################################################
+
+publication:
+  # Export formats
+  formats:
+    mediawiki: true  # Export to MediaWiki pages
+    json: false      # Export to JSON (for AI use)
+    pdf: false       # Generate PDFs for distribution
+  
+  # Image processing for web
+  web_image_max_height: 1500  # pixels
+  web_image_formats: ["jpeg", "png"]
+  web_image_jpeg_quality: 75
+  
+  # Page splitting (for very long works)
+  max_page_length: 50000  # characters; split if longer
+  
+  # Include original page images in output
+  include_page_scans: true
+  page_scan_format: "jpeg"
+
+################################################################################
+# WATCHER & ORCHESTRATION
+################################################################################
+
+watcher:
+  # Watcher identifier (set per machine)
+  # On OrionMX: "orionmx_watcher_1"
+  # On OrionMega: "orionmega_watcher_1"
+  instance_id: "orionmx_watcher_1"
+  
+  # Polling interval (seconds)
+  poll_interval: 30
+  
+  # Heartbeat file settings
+  heartbeat_interval: 30  # seconds
+  heartbeat_file: "0200_STATE\\watcher_heartbeat.json"
+  
+  # Task claiming (atomic file operations)
+  claim_timeout: 3600  # seconds; if task not completed, consider failed
+  
+  # Retry policy
+  max_retries: 3
+  retry_backoff_base: 2  # exponential: 2, 4, 8 seconds
+  
+  # Concurrency settings
+  max_concurrent_tasks: 1  # 1 for single-core, increase for multi-core
+  task_queue_size: 100
+  
+  # Task priorities
+  priority_levels: ["high", "normal", "low"]
+  opportunistic_only_priority: "low"  # OrionMega runs only low-priority tasks
+  
+  # Logging
+  log_level: "INFO"  # DEBUG, INFO, WARNING, ERROR
+  log_file_rotation_mb: 50
+  log_retention_days: 90
+
+################################################################################
+# SCHEDULED TASKS (CRON/MAINTENANCE)
+################################################################################
+
+scheduled_tasks:
+  # Enable scheduled task processing
+  enabled: true
+  
+  # Nightly validation (2:00 AM)
+  nightly_validation:
+    enabled: true
+    schedule: "0 2 * * *"  # cron format
+    tasks:
+      - validate_new_downloads
+      - check_missing_files
+  
+  # Weekly index rebuild (Sunday 3:00 AM)
+  weekly_maintenance:
+    enabled: true
+    schedule: "0 3 * * 0"
+    tasks:
+      - rebuild_search_index
+      - generate_summary_report
+  
+  # Monthly cleanup (1st of month, 4:00 AM)
+  monthly_cleanup:
+    enabled: true
+    schedule: "0 4 1 * *"
+    tasks:
+      - purge_old_quarantine_files
+      - archive_old_logs
+      - cleanup_working_layer
+      - refresh_canonical_index
+
+################################################################################
+# RETENTION POLICY
+################################################################################
+
+retention:
+  # Tier 0: Must keep (never delete)
+  tier0_sources: ["local_scans"]  # Never delete from these sources
+  
+  # Tier 2: Discardable after processing
+  tier2_sources: ["internet_archive", "hathi_trust"]
+  
+  # Raw file retention after processing
+  keep_raw_after_processing: false
+  quarantine_instead_of_delete: true
+  quarantine_retention_days: 60
+  
+  # Working files cleanup
+  cleanup_working_after_days: 30
+  keep_logs: true
+  log_retention_days: 90
+  
+  # Archive processed intermediates
+  archive_intermediates: true
+  archive_dir: "0290_Archive"
+
+################################################################################
+# LOGGING & MONITORING
+################################################################################
+
+logging:
+  # Log level: DEBUG, INFO, WARNING, ERROR, CRITICAL
+  level: "INFO"
+  
+  # Log format
+  format: "[%(asctime)s] %(name)s - %(levelname)s - %(message)s"
+  
+  # Log file locations
+  log_dir: "0200_STATE\\logs"
+  
+  # Log file naming
+  log_filename_pattern: "%Y-%m-%d_processing.log"
+  
+  # File rotation
+  max_log_size_mb: 50
+  backup_count: 10
+  
+  # Console output
+  console_output: true
+  console_level: "INFO"
+
+monitoring:
+  # Heartbeat monitoring
+  heartbeat_check_interval: 300  # seconds (5 minutes)
+  heartbeat_timeout: 600  # seconds; alert if no update in 10 min
+  
+  # Disk space monitoring
+  check_disk_space: true
+  warn_threshold_percent: 80  # Alert when NAS > 80% full
+  stop_threshold_percent: 95  # Pause ingestion when > 95% full
+  
+  # Task failure monitoring
+  alert_on_task_failure: true
+  failure_alert_email: null  # Set if alerting enabled
+  
+  # Performance monitoring
+  track_task_duration: true
+  report_slow_tasks: true
+  slow_task_threshold_seconds: 3600  # Tasks taking > 1 hour
+
+################################################################################
+# DEPLOYMENT ENVIRONMENT
+################################################################################
+
+environment:
+  # Machine/node identification
+  node_name: "orionmx"  # orionmx, orionmega, etc.
+  
+  # Operating system
+  os: "windows"  # windows, linux
+  
+  # Development vs. Production
+  mode: "production"  # development, staging, production
+  
+  # Network configuration
+  nas_accessible: true
+  nas_connection_type: "smb"  # smb, nfs
+  nas_timeout_seconds: 30
+  
+  # Proxy settings (if needed for IA/Hathi downloads)
+  http_proxy: null
+  https_proxy: null
+
+################################################################################
+# ADVANCED / EXPERIMENTAL
+################################################################################
+
+experimental:
+  # Future AI enrichment features
+  auto_correct_ocr: false
+  # ocr_correction_model: "models/ocr_correction_v1"
+  
+  # Named entity recognition on published texts
+  named_entity_recognition: false
+  # ner_model: "en_core_web_sm"
+  
+  # Bidirectional wiki sync (pull corrections back)
+  wiki_sync_enabled: false
+  wiki_sync_interval_days: 7
+
+################################################################################
+# INTERNAL / DO NOT MODIFY
+################################################################################
+
+_version: "2.4"  # Config schema version (tied to blueprint version)
+_created: "2026-01-20"
+_last_updated: "2026-01-20"
