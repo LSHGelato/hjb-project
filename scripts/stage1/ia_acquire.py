@@ -8,12 +8,15 @@ Download "highest-tier" files from Internet Archive for a list of items, and pla
 
   01_Research/Historical_Journals_Inputs/0110_Internet_Archive/{collection}/{pub_family}/{IAIdentifier}/
 
+Also registers each downloaded container in the MySQL database.
+
 Design goals (pragmatic + reliable)
 -----------------------------------
 1) Deterministic destinations: you control {collection} and {pub_family}.
 2) Idempotent: if a target file already exists, we skip it.
 3) Conservative defaults: low concurrency; retries on common SMB/Windows transient failures.
 4) Very explicit logging + comments so you can reason about behavior.
+5) Database registration: Creates container_t and processing_status_t records after download.
 
 Input file formats
 ------------------
@@ -34,7 +37,7 @@ Lines starting with # are ignored.
 
 Dependencies
 ------------
-pip install internetarchive
+pip install internetarchive mysql-connector-python PyYAML
 
 Usage examples (PowerShell)
 ---------------------------
@@ -50,6 +53,11 @@ python .\scripts\stage1\ia_acquire.py `
   --list .\config\ia_ids_only.txt `
   --default-collection American_Architect_collection `
   --default-family American_Architect_family
+
+# Disable database registration (for testing without DB)
+python .\scripts\stage1\ia_acquire.py `
+  --list .\config\ia_items.txt `
+  --no-database
 
 Exit codes
 ----------
@@ -74,6 +82,16 @@ try:
     import internetarchive  # type: ignore
 except Exception as e:
     internetarchive = None
+
+# Database integration (optional - graceful degradation if unavailable)
+try:
+    # Import from scripts/common/hjb_db.py
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    from scripts.common import hjb_db
+    DB_AVAILABLE = True
+except ImportError:
+    DB_AVAILABLE = False
+    hjb_db = None
 
 
 # -----------------------------
@@ -244,6 +262,117 @@ def rename_downloads_in_place(identifier_dir: Path, identifier: str, files_downl
 
 
 # -----------------------------
+# Database registration
+# -----------------------------
+def register_container_in_db(
+    row: IaRow,
+    dest_dir: Path,
+    downloaded_files: List[str],
+    download_status: str,
+) -> Optional[int]:
+    """
+    Register the downloaded container in the MySQL database.
+    
+    Returns:
+        container_id (int) if successful, None otherwise
+    """
+    if not DB_AVAILABLE or hjb_db is None:
+        return None
+    
+    try:
+        # Check if this container already exists (idempotency)
+        existing = hjb_db.get_container_by_source("ia", row.identifier)
+        if existing:
+            container_id = existing["container_id"]
+            print(f"  [DB] Container already registered: container_id={container_id}")
+            
+            # Update download status if it changed
+            if download_status == "ok" and existing.get("download_status") != "complete":
+                hjb_db.execute_query(
+                    "UPDATE containers_t SET download_status = 'complete', downloaded_at = NOW() WHERE container_id = %s",
+                    (container_id,)
+                )
+                print(f"  [DB] Updated download_status to 'complete'")
+            
+            return container_id
+        
+        # Get or create the publication family
+        family = hjb_db.get_family_by_root(row.family)
+        if not family:
+            # Create new family record
+            family_id = hjb_db.insert_family(
+                family_root=row.family,
+                display_name=row.family.replace("_", " ").title(),
+                family_type="journal",  # Default; can be updated later if it's a book
+            )
+            print(f"  [DB] Created new family: family_id={family_id} ({row.family})")
+        else:
+            family_id = family["family_id"]
+        
+        # Determine which files we have (for has_* flags)
+        has_jp2 = any("_jp2.zip" in f for f in downloaded_files)
+        has_hocr = any("_hocr.html" in f for f in downloaded_files)
+        has_djvu_xml = any("_djvu.xml" in f for f in downloaded_files)
+        has_pdf = any(".pdf" in f for f in downloaded_files)
+        has_scandata = any("_scandata.xml" in f for f in downloaded_files)
+        
+        # Create the container record
+        container_id = hjb_db.insert_container(
+            source_system="ia",
+            source_identifier=row.identifier,
+            source_url=f"https://archive.org/details/{row.identifier}",
+            family_id=family_id,
+            title_id=None,  # Will be set later when we parse metadata
+            container_label=row.identifier,
+            total_pages=None,  # Will be determined during validation or OCR
+            has_jp2=has_jp2,
+            has_hocr=has_hocr,
+            has_djvu_xml=has_djvu_xml,
+            has_pdf=has_pdf,
+            raw_input_path=str(dest_dir),
+        )
+        
+        # Update has_scandata flag if present (not in insert_container params)
+        if has_scandata:
+            hjb_db.execute_query(
+                "UPDATE containers_t SET has_scandata = 1 WHERE container_id = %s",
+                (container_id,)
+            )
+        
+        # Set download_status based on result
+        db_download_status = "complete" if download_status == "ok" else "failed"
+        hjb_db.execute_query(
+            "UPDATE containers_t SET download_status = %s, downloaded_at = NOW() WHERE container_id = %s",
+            (db_download_status, container_id)
+        )
+        
+        # Create processing_status record
+        hjb_db.insert_processing_status(container_id)
+        
+        # Mark Stage 1 complete if download succeeded
+        if download_status == "ok":
+            hjb_db.update_stage_completion(
+                container_id, 
+                "stage1_ingestion", 
+                complete=True
+            )
+        else:
+            hjb_db.update_stage_completion(
+                container_id,
+                "stage1_ingestion",
+                complete=False,
+                error_message=f"Download status: {download_status}"
+            )
+        
+        print(f"  [DB] Registered container: container_id={container_id}")
+        return container_id
+        
+    except Exception as e:
+        eprint(f"  [DB ERROR] Failed to register container: {type(e).__name__}: {e}")
+        return None
+
+
+# -----------------------------
 # Core download routine
 # -----------------------------
 def download_one(
@@ -253,6 +382,7 @@ def download_one(
     max_retries: int,
     retry_sleep: float,
     verbose: bool,
+    enable_db: bool = True,
 ) -> dict:
     """
     Download for a single IA identifier into:
@@ -278,6 +408,7 @@ def download_one(
         "downloaded": [],
         "missing_suffixes": [],
         "note": "",
+        "container_id": None,
     }
 
     # Obtain the IA item (network operation).
@@ -309,12 +440,21 @@ def download_one(
             if not selected:
                 result["status"] = "no_matching_files"
                 result["note"] = "No requested files found for configured tiers."
+                # Register even if no files (for tracking failed items)
+                if enable_db:
+                    container_id = register_container_in_db(row, dest_dir, [], result["status"])
+                    result["container_id"] = container_id
                 return result
 
             # Idempotency check: if final renamed files are all present, do nothing.
             if already_have_all(dest_dir, ident, selected):
                 result["status"] = "skipped_already_present"
                 result["note"] = "All selected files already exist in final renamed form."
+                result["downloaded"] = selected  # Mark as downloaded for DB
+                # Register in DB (will update if exists)
+                if enable_db:
+                    container_id = register_container_in_db(row, dest_dir, selected, "ok")
+                    result["container_id"] = container_id
                 return result
 
             # IA download behavior:
@@ -333,6 +473,9 @@ def download_one(
             if not identifier_dir.exists():
                 result["status"] = "download_error"
                 result["note"] = f"Expected IA folder not created: {identifier_dir}"
+                if enable_db:
+                    container_id = register_container_in_db(row, dest_dir, [], result["status"])
+                    result["container_id"] = container_id
                 return result
 
             # Rename into stable prefix form.
@@ -352,12 +495,22 @@ def download_one(
 
             result["status"] = "ok"
             result["note"] = f"Downloaded {len(downloaded)}/{len(selected)} selected files."
+            
+            # Register in database
+            if enable_db:
+                container_id = register_container_in_db(row, dest_dir, downloaded, result["status"])
+                result["container_id"] = container_id
+            
             return result
 
         except Exception as e:
             if attempt >= max_retries:
                 result["status"] = "error"
                 result["note"] = f"Failed after {attempt} attempt(s): {type(e).__name__}: {e}"
+                # Register failure in database
+                if enable_db:
+                    container_id = register_container_in_db(row, dest_dir, [], result["status"])
+                    result["container_id"] = container_id
                 return result
             # Backoff and retry
             time.sleep(retry_sleep * attempt)
@@ -392,7 +545,28 @@ def main() -> int:
     ap.add_argument("--retry-sleep", type=float, default=1.5, help="Base sleep seconds between retries.")
     ap.add_argument("--verbose", action="store_true", help="Verbose IA downloader output.")
     ap.add_argument("--write-report", action="store_true", help="Write a JSON report into base-dir/_reports.")
+    ap.add_argument("--no-database", action="store_true", help="Disable database registration (for testing).")
     args = ap.parse_args()
+
+    # Check database availability
+    enable_db = not args.no_database
+    if enable_db and not DB_AVAILABLE:
+        eprint("[WARNING] Database module not available. Install with: pip install mysql-connector-python PyYAML")
+        eprint("[WARNING] Continuing without database registration. Use --no-database to suppress this warning.")
+        enable_db = False
+    
+    if enable_db:
+        # Test database connection
+        try:
+            if not hjb_db.test_connection():
+                eprint("[WARNING] Database connection test failed. Continuing without database registration.")
+                enable_db = False
+            else:
+                print("[DB] Database connection successful")
+        except Exception as e:
+            eprint(f"[WARNING] Database connection error: {e}")
+            eprint("[WARNING] Continuing without database registration.")
+            enable_db = False
 
     # Resolve repo root deterministically.
     if args.repo_root:
@@ -442,6 +616,7 @@ def main() -> int:
     print(f"[HJB] IA acquisition starting: items={len(rows)} workers={workers} tier={args.tier}")
     print(f"[HJB] base_dir={base_dir}")
     print(f"[HJB] list={list_path}")
+    print(f"[HJB] database_enabled={enable_db}")
 
     with ThreadPoolExecutor(max_workers=workers) as ex:
         futs = [
@@ -453,6 +628,7 @@ def main() -> int:
                 int(args.retries),
                 float(args.retry_sleep),
                 bool(args.verbose),
+                enable_db,
             )
             for row in rows
         ]
@@ -462,7 +638,12 @@ def main() -> int:
             status = r.get("status")
             ident = r.get("identifier")
             note = r.get("note", "")
-            print(f"[{ident}] {status} - {note}")
+            container_id = r.get("container_id")
+            
+            if container_id:
+                print(f"[{ident}] {status} - {note} (container_id={container_id})")
+            else:
+                print(f"[{ident}] {status} - {note}")
 
     # Optional report for later analysis / provenance.
     if args.write_report:
@@ -472,7 +653,14 @@ def main() -> int:
         rep_path.write_text(json.dumps(results, indent=2, sort_keys=True), encoding="utf-8")
         print(f"[HJB] Wrote report: {rep_path}")
 
-    # Exit 0 even if some identifiers had missing files; that’s expected on IA.
+    # Summary
+    successful = sum(1 for r in results if r.get("status") in ["ok", "skipped_already_present"])
+    failed = sum(1 for r in results if r.get("status") in ["error", "download_error", "no_matching_files"])
+    registered = sum(1 for r in results if r.get("container_id") is not None)
+    
+    print(f"\n[HJB] Summary: {successful} successful, {failed} failed, {registered} registered in database")
+
+    # Exit 0 even if some identifiers had missing files; that's expected on IA.
     return 0
 
 
