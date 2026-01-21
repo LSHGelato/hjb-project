@@ -156,10 +156,7 @@ def main():
     flags_root = Path(flags_root_s)
     
     # Heartbeat naming convention matches watcher
-    if watcher_id == "orionmx_1":
-        hb = state_root / "watcher_heartbeat.json"
-    else:
-        hb = state_root / f"watcher_heartbeat_{watcher_id}.json"
+    hb = state_root / f"watcher_heartbeat_{watcher_id}.json"
 
     # Also expose scratch_root (useful for future supervisor actions; tolerant to current config shape)
     scratch_root = None
