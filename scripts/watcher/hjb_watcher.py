@@ -4,13 +4,17 @@ HJB Watcher (Success v0)
 
 Goals:
 - Write a heartbeat JSON file to NAS state_root
-- Claim "no-op" tasks from flags/pending via atomic rename to flags/processing
+- Claim tasks from flags/pending via atomic rename to flags/processing
 - Complete tasks by moving to flags/completed
+- Support opportunistic mode: short poll intervals, check if OrionMX is busy before claiming
+- Support one-task-and-exit mode: process one task then cleanly exit
 - Fail fast if scratch root or NAS state paths are missing
 
 Design notes:
 - Intentionally minimal. No OCR. No MySQL. No MediaWiki.
 - Uses config/config.yaml if present, else falls back to config.example.yaml.
+- Opportunistic mode: 10-second poll, check if orionmx_* watchers have processing tasks
+- One-task mode: claim one task, process it, then exit cleanly
 """
 
 from __future__ import annotations
@@ -113,9 +117,6 @@ def write_json(path: Path, payload: Dict[str, Any]) -> None:
     raise PermissionError(f"Failed to write JSON (retries exhausted): {path}")
 
 def heartbeat_path(state_root: Path, watcher_id: str) -> Path:
-    # Keep OrionMX canonical heartbeat filename if watcher_id is orionmx_1, else unique file.
-    if watcher_id == "orionmx_1":
-        return state_root / "watcher_heartbeat.json"
     return state_root / f"watcher_heartbeat_{watcher_id}.json"
 
 def acquire_single_instance_lock(state_root: Path, watcher_id: str) -> Path:
@@ -245,6 +246,21 @@ def ensure_scratch_contract(scratch_root: Path) -> None:
     for sub in expected:
         p = scratch_root / sub
         require_dir(p, f"SCRATCH subfolder '{sub}'")
+
+
+def is_orionmx_busy(flags_root: Path) -> bool:
+    """
+    Check if any orionmx_* watcher has tasks in processing.
+    Returns True if at least one orionmx_* task is being processed.
+    """
+    processing = flags_root / "processing"
+    if not processing.exists():
+        return False
+    
+    for task_file in processing.glob("*"):
+        if task_file.is_file() and "orionmx_" in task_file.name:
+            return True
+    return False
 
 
 def execute_manifest_task(
@@ -504,7 +520,14 @@ def run_once(
     flags_root: Path,
     logs_root: Path,
     poll_seconds: int,
-) -> None:
+    opportunistic: bool = False,
+) -> bool:
+    """
+    Run one cycle of the watcher.
+    
+    Returns True if a task was processed (for one-task-and-exit mode).
+    Returns False if no task was processed.
+    """
     pending = flags_root / "pending"
     processing = flags_root / "processing"
     completed = flags_root / "completed"
@@ -535,24 +558,31 @@ def run_once(
         "mode": "success_v0",
         "poll_seconds": poll_seconds,
         "status": "running",
+        "opportunistic": opportunistic,
     }
     try:
         write_json(hb, hb_payload)
     except Exception:
         # Heartbeat is informational; do not crash if SMB transiently locks the file.
         pass
+    
+    # In opportunistic mode: check if OrionMX watchers are busy
+    # Only claim a task if OrionMX has processing tasks
+    if opportunistic:
+        if not is_orionmx_busy(flags_root):
+            # OrionMX is idle; don't hog resources
+            return False
         
-    # ------------------------------------------------------------
-    # Manifest-driven JSON flags (one per cycle)
-    # Convention: any *.json in flags/pending is treated as a task manifest.
-    # ------------------------------------------------------------
+    # Try to claim one manifest-driven JSON task
     json_candidates = sorted([p for p in pending.glob("*.json") if p.is_file()])
     for src in json_candidates[:1]:
         dst = processing / f"{src.name}.{watcher_id}.processing"
         if not atomic_rename(src, dst):
             continue
 
+        task_processed = False
         started_utc = utc_now_iso()
+        started_ts = time.time()
         try:
             manifest = json.loads(dst.read_text(encoding="utf-8"))
             if not isinstance(manifest, dict):
@@ -596,6 +626,8 @@ def run_once(
                 dst.read_text(encoding="utf-8"), encoding="utf-8"
             )
 
+            ended_utc = utc_now_iso()
+            elapsed_seconds = int(time.time() - started_ts)
             ts2 = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
             result_path = outdir / f"{task_id}.{watcher_id}.{ts2}.result.json"
             write_json(result_path, {
@@ -607,7 +639,8 @@ def run_once(
                 "hostname": socket.gethostname(),
                 "pid": os.getpid(),
                 "started_utc": started_utc,
-                "ended_utc": utc_now_iso(),
+                "ended_utc": ended_utc,
+                "duration_seconds": elapsed_seconds,
                 "status": "ok",
                 "outputs": outputs,
                 "metrics": metrics,
@@ -618,6 +651,8 @@ def run_once(
                 dst.replace(outdir / f"{src.name}.{watcher_id}.done")
             except Exception:
                 pass
+            
+            task_processed = True
 
         except Exception as ex:
             # Write error under flags/failed/<task_id-or-derived>/
@@ -640,6 +675,8 @@ def run_once(
             except Exception:
                 pass
 
+            ended_utc = utc_now_iso()
+            elapsed_seconds = int(time.time() - started_ts)
             err_path = errdir / f"{fallback_id}.{watcher_id}.{ts_fail}.error.json"
             write_json(err_path, {
                 "schema": TASK_ERROR_SCHEMA_V1,
@@ -648,7 +685,8 @@ def run_once(
                 "hostname": socket.gethostname(),
                 "pid": os.getpid(),
                 "started_utc": started_utc,
-                "ended_utc": utc_now_iso(),
+                "ended_utc": ended_utc,
+                "duration_seconds": elapsed_seconds,
                 "status": "error",
                 "error_type": type(ex).__name__,
                 "error": str(ex),
@@ -659,47 +697,18 @@ def run_once(
                 dst.replace(errdir / f"{src.name}.{watcher_id}.failed")
             except Exception:
                 pass
-                
-        # Only one per cycle
-        break
+        
+        return task_processed
     
-    # Claim a single no-op task if present.
-    # Convention: files starting with "noop_" in flags/pending are safe Success v0 tasks.
-    candidates = sorted([p for p in pending.glob("noop_*") if p.is_file()])
-    for src in candidates[:1]:
-        dst = processing / f"{src.name}.{watcher_id}.processing"
-        if not atomic_rename(src, dst):
-            continue  # another watcher got it
-
-        # "Process" no-op: write a small completion record
-        result = {
-            "watcher_id": watcher_id,
-            "claimed_from": str(src),
-            "processing_as": str(dst),
-            "completed_utc": utc_now_iso(),
-            "result": "ok",
-            "type": "noop",
-        }
-
-        # Move to completed
-        done = completed / f"{src.name}.{watcher_id}.completed.json"
-        write_json(done, result)
-
-        # Clean up processing marker
-        try:
-            dst.unlink(missing_ok=True)
-        except Exception:
-            pass
-
-        # Only one per cycle
-        break
+    return False
 
 
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--watcher-id", required=False)
     ap.add_argument("--continuous", action="store_true", help="Run forever (Success v0 loop).")
-    ap.add_argument("--opportunistic", action="store_true", help="Alias of continuous for now.")
+    ap.add_argument("--opportunistic", action="store_true", help="Opportunistic mode: short poll, check OrionMX busy.")
+    ap.add_argument("--one-task-and-exit", action="store_true", help="Process one task then exit.")
     ap.add_argument("--poll-seconds", type=int, default=30)
     ap.add_argument("--config", default=None, help="Optional path to config YAML.")
     args = ap.parse_args()
@@ -732,19 +741,29 @@ def main() -> int:
     except Exception as ex:
         raise SystemExit(f"Failed to acquire watcher lock for '{watcher_id}': {ex}")
 
-    loop = args.continuous or args.opportunistic
-    if not loop:
-        # single cycle useful for testing
+    # Determine poll interval based on mode
+    poll_seconds = args.poll_seconds
+    if args.opportunistic:
+        poll_seconds = 10  # Hungry polling for opportunistic mode
+
+    # Determine loop behavior
+    one_task_mode = args.one_task_and_exit
+    continuous_mode = args.continuous or args.opportunistic
+
+    if not continuous_mode:
+        # Single cycle useful for testing
         run_once(
             watcher_id=watcher_id,
             state_root=paths["state_root"],
             flags_root=paths["flags_root"],
             logs_root=paths["logs_root"],
-            poll_seconds=args.poll_seconds,
+            poll_seconds=poll_seconds,
+            opportunistic=args.opportunistic,
         )
         return 0
 
-    print(f"[HJB] watcher_id={watcher_id} mode=continuous poll={args.poll_seconds}s")
+    mode_label = "opportunistic" if args.opportunistic else "continuous"
+    print(f"[HJB] watcher_id={watcher_id} mode={mode_label} one_task={one_task_mode} poll={poll_seconds}s")
     print(f"[HJB] state_root={paths['state_root']}")
     print(f"[HJB] flags_root={paths['flags_root']}")
     print(f"[HJB] logs_root={paths['logs_root']}")
@@ -754,14 +773,22 @@ def main() -> int:
         while True:
             if lock_dir is not None:
                 update_lock_owner(lock_dir, watcher_id)
-            run_once(
+            
+            task_processed = run_once(
                 watcher_id=watcher_id,
                 state_root=paths["state_root"],
                 flags_root=paths["flags_root"],
                 logs_root=paths["logs_root"],
-                poll_seconds=args.poll_seconds,
+                poll_seconds=poll_seconds,
+                opportunistic=args.opportunistic,
             )
-            time.sleep(max(1, args.poll_seconds))
+            
+            # If one-task mode and task was processed, exit cleanly
+            if one_task_mode and task_processed:
+                print(f"[HJB] One-task mode: task processed, exiting.")
+                return 0
+            
+            time.sleep(max(1, poll_seconds))
     finally:
         release_single_instance_lock(lock_dir)
 
