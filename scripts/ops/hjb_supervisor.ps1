@@ -123,14 +123,18 @@ def load_cfg(p: Path) -> dict:
     return data
 
 def pick(cfg: dict, paths: dict, key: str):
+    storage = cfg.get("storage", {})
     v = paths.get(key)
     if isinstance(v, str) and v.strip():
         return v.strip()
     v2 = cfg.get(key)
     if isinstance(v2, str) and v2.strip():
         return v2.strip()
+    v3 = storage.get(key)
+    if isinstance(v3, str) and v3.strip():
+        return v3.strip()
     return None
-
+    
 def main():
     cfg_path = Path(r"{CFG_PATH}")
     watcher_id = r"{WATCHER_ID}"
@@ -138,7 +142,12 @@ def main():
     cfg = load_cfg(cfg_path)
     paths = cfg.get("paths") if isinstance(cfg.get("paths"), dict) else {}
 
-    state_root_s = pick(cfg, paths, "state_root")
+state_root_s = pick(cfg, paths, "state_root")
+if not state_root_s:
+    working_files_s = pick(cfg, paths, "working_files")
+    state_dir_s = pick(cfg, paths, "state_dir")
+    if working_files_s and state_dir_s:
+        state_root_s = str(Path(working_files_s) / state_dir_s)
     if not state_root_s:
         raise SystemExit("Missing state_root (expected cfg.paths.state_root or cfg.state_root)")
     state_root = Path(state_root_s)
