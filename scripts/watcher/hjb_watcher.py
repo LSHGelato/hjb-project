@@ -192,19 +192,26 @@ def parse_paths(cfg: Dict[str, Any]) -> Dict[str, Path]:
     """
     Accepts either:
     - cfg["paths"]["state_root"] style, OR
-    - cfg["nas_root"] + cfg["state_dir"] (construct state_root from both)
+    - cfg["storage"]["nas_root"] + cfg["storage"]["state_dir"] (construct state_root from both)
     """
     paths = cfg.get("paths", {})
+    storage = cfg.get("storage", {})
     if not isinstance(paths, dict):
         paths = {}
+    if not isinstance(storage, dict):
+        storage = {}
 
     def pick(key: str) -> Optional[str]:
+        # Try paths first, then top-level cfg, then storage
         v = paths.get(key)
         if isinstance(v, str) and v.strip():
             return v.strip()
         v2 = cfg.get(key)
         if isinstance(v2, str) and v2.strip():
             return v2.strip()
+        v3 = storage.get(key)
+        if isinstance(v3, str) and v3.strip():
+            return v3.strip()
         return None
 
     # Try explicit state_root first
@@ -218,7 +225,7 @@ def parse_paths(cfg: Dict[str, Any]) -> Dict[str, Path]:
             state_root_s = str(Path(nas_root_s) / state_dir_s)
     
     if not state_root_s:
-        raise KeyError("Missing state_root (expected cfg.state_root, cfg.paths.state_root, or cfg.nas_root + cfg.state_dir)")
+        raise KeyError("Missing state_root (expected cfg.state_root, cfg.paths.state_root, or cfg.storage.nas_root + cfg.storage.state_dir)")
 
     # Derived conventional subpaths under state_root
     state_root = Path(state_root_s)
@@ -230,7 +237,7 @@ def parse_paths(cfg: Dict[str, Any]) -> Dict[str, Path]:
         "flags_root": flags_root,
         "logs_root": logs_root,
     }
-
+    
 def parse_scratch_root(cfg: Dict[str, Any]) -> Path:
     """
     Accepts:
