@@ -240,20 +240,36 @@ def parse_paths(cfg: Dict[str, Any]) -> Dict[str, Path]:
     
 def parse_scratch_root(cfg: Dict[str, Any]) -> Path:
     """
-    Accepts:
-    - cfg["scratch"]["root"]
-    - cfg["scratch_root"]
+    Get scratch root from:
+    - cfg["scratch"]["root"], OR
+    - cfg["scratch_root"], OR
+    - cfg["storage"]["local_scratch"]
     """
     scratch = cfg.get("scratch", {})
-    if isinstance(scratch, dict):
-        v = scratch.get("root")
-        if isinstance(v, str) and v.strip():
-            return Path(v.strip())
-    v2 = cfg.get("scratch_root")
-    if isinstance(v2, str) and v2.strip():
-        return Path(v2.strip())
-    raise KeyError("Missing scratch root (expected cfg.scratch.root or cfg.scratch_root)")
+    storage = cfg.get("storage", {})
+    if not isinstance(scratch, dict):
+        scratch = {}
+    if not isinstance(storage, dict):
+        storage = {}
 
+    def pick(key: str) -> Optional[str]:
+        v = scratch.get(key)
+        if isinstance(v, str) and v.strip():
+            return v.strip()
+        v2 = cfg.get(key)
+        if isinstance(v2, str) and v2.strip():
+            return v2.strip()
+        v3 = storage.get(key)
+        if isinstance(v3, str) and v3.strip():
+            return v3.strip()
+        return None
+
+    scratch_root_s = pick("root") or pick("scratch_root") or pick("local_scratch")
+    
+    if not scratch_root_s:
+        raise KeyError("Missing scratch root (expected cfg.scratch.root, cfg.scratch_root, or cfg.storage.local_scratch)")
+
+    return Path(scratch_root_s)
 
 def ensure_scratch_contract(scratch_root: Path) -> None:
     require_dir(scratch_root, "SCRATCH_ROOT")
