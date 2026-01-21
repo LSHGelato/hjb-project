@@ -192,7 +192,7 @@ def parse_paths(cfg: Dict[str, Any]) -> Dict[str, Path]:
     """
     Accepts either:
     - cfg["paths"]["state_root"] style, OR
-    - cfg["state_root"] style
+    - cfg["nas_root"] + cfg["state_dir"] (construct state_root from both)
     """
     paths = cfg.get("paths", {})
     if not isinstance(paths, dict):
@@ -207,9 +207,18 @@ def parse_paths(cfg: Dict[str, Any]) -> Dict[str, Path]:
             return v2.strip()
         return None
 
+    # Try explicit state_root first
     state_root_s = pick("state_root")
+    
+    # If not found, try nas_root + state_dir
     if not state_root_s:
-        raise KeyError("Missing state_root (expected cfg.paths.state_root or cfg.state_root)")
+        nas_root_s = pick("nas_root")
+        state_dir_s = pick("state_dir")
+        if nas_root_s and state_dir_s:
+            state_root_s = str(Path(nas_root_s) / state_dir_s)
+    
+    if not state_root_s:
+        raise KeyError("Missing state_root (expected cfg.state_root, cfg.paths.state_root, or cfg.nas_root + cfg.state_dir)")
 
     # Derived conventional subpaths under state_root
     state_root = Path(state_root_s)
@@ -221,7 +230,6 @@ def parse_paths(cfg: Dict[str, Any]) -> Dict[str, Path]:
         "flags_root": flags_root,
         "logs_root": logs_root,
     }
-
 
 def parse_scratch_root(cfg: Dict[str, Any]) -> Path:
     """
