@@ -19,7 +19,7 @@ storage:
   # Local scratch disk on processing machines (for temp files during OCR, etc.)
   # On OrionMX: C:\Scratch (SSD for speed)
   # On OrionMega: may vary; set per-machine
-  local_scratch: "C:\\Scratch"
+  local_scratch: "C:\\Scratch\\NVMe"
   
   # Subdirectories within working_files (created/managed by pipeline)
   state_dir: "0200_STATE"
