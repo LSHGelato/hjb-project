@@ -189,11 +189,6 @@ def release_single_instance_lock(lock_dir: Optional[Path]) -> None:
         pass
 
 def parse_paths(cfg: Dict[str, Any]) -> Dict[str, Path]:
-    """
-    Accepts either:
-    - cfg["paths"]["state_root"] style, OR
-    - cfg["storage"]["nas_root"] + cfg["storage"]["state_dir"] (construct state_root from both)
-    """
     paths = cfg.get("paths", {})
     storage = cfg.get("storage", {})
     if not isinstance(paths, dict):
@@ -202,7 +197,6 @@ def parse_paths(cfg: Dict[str, Any]) -> Dict[str, Path]:
         storage = {}
 
     def pick(key: str) -> Optional[str]:
-        # Try paths first, then top-level cfg, then storage
         v = paths.get(key)
         if isinstance(v, str) and v.strip():
             return v.strip()
@@ -217,7 +211,14 @@ def parse_paths(cfg: Dict[str, Any]) -> Dict[str, Path]:
     # Try explicit state_root first
     state_root_s = pick("state_root")
     
-    # If not found, try nas_root + state_dir
+    # If not found, try working_files + state_dir
+    if not state_root_s:
+        working_files_s = pick("working_files")
+        state_dir_s = pick("state_dir")
+        if working_files_s and state_dir_s:
+            state_root_s = str(Path(working_files_s) / state_dir_s)
+    
+    # Fallback: try nas_root + state_dir (older style)
     if not state_root_s:
         nas_root_s = pick("nas_root")
         state_dir_s = pick("state_dir")
@@ -225,9 +226,8 @@ def parse_paths(cfg: Dict[str, Any]) -> Dict[str, Path]:
             state_root_s = str(Path(nas_root_s) / state_dir_s)
     
     if not state_root_s:
-        raise KeyError("Missing state_root (expected cfg.state_root, cfg.paths.state_root, or cfg.storage.nas_root + cfg.storage.state_dir)")
+        raise KeyError("Missing state_root")
 
-    # Derived conventional subpaths under state_root
     state_root = Path(state_root_s)
     flags_root = Path(pick("flags_root") or str(state_root / "flags"))
     logs_root = Path(pick("logs_root") or str(state_root / "logs"))
