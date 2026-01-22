@@ -534,7 +534,7 @@ def task_stage1_ia_download(manifest: Dict[str, Any], task_id: str, flags_root: 
     download_result = ia_acquire.download_one(
         row=ia_row,
         base_dir=base_dir,
-        suffixes=ia_acquire.TIER_A_SUFFIXES,
+        suffixes=ia_acquire.TIER_COMPREHENSIVE_SUFFIXES,  # NEW
         max_retries=3,
         retry_sleep=2.0,
         verbose=True,
