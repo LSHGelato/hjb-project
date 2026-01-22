@@ -109,7 +109,7 @@ TIER_A_SUFFIXES = [
 
 TIER_B_SUFFIXES = [
     "_meta.xml",       # IA metadata in XML format
-    "_json.json",      # IA metadata in JSON format (preferred for parsing)
+    # "_json.json" removed--fetch via API instead
     "_djvu.txt",       # DjVu OCR text (plain text fallback)
     "_djvu.xml",       # DjVu OCR with structure (alternative to HOCR)
 ]
@@ -263,6 +263,54 @@ def rename_downloads_in_place(identifier_dir: Path, identifier: str, files_downl
             # Non-fatal; downstream checks/logs will reveal oddities
             pass
 
+# Add this to scripts/stage1/ia_acquire.py
+
+def fetch_ia_metadata_json(identifier: str, dest_dir: Path, verbose: bool = False) -> Optional[str]:
+    """
+    Fetch metadata JSON from Internet Archive metadata API.
+    
+    Args:
+        identifier: IA identifier (e.g., 'sim_american-architect-and-architecture_1876-01-01_1_1')
+        dest_dir: Destination directory to save the JSON file
+        verbose: Print debug info
+    
+    Returns:
+        Path to saved JSON file, or None if fetch failed
+    """
+    import json
+    import requests
+    
+    dest_file = dest_dir / f"{identifier}_json.json"
+    
+    if dest_file.is_file():
+        if verbose:
+            print(f"Metadata JSON already exists: {dest_file}")
+        return str(dest_file)
+    
+    url = f"https://archive.org/metadata/{identifier}"
+    
+    if verbose:
+        print(f"Fetching metadata JSON from: {url}")
+    
+    try:
+        resp = requests.get(url, timeout=30)
+        resp.raise_for_status()
+        metadata = resp.json()
+        
+        # Save to file
+        dest_file.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+        
+        if verbose:
+            print(f"Saved metadata JSON: {dest_file}")
+        
+        return str(dest_file)
+    
+    except requests.RequestException as e:
+        print(f"Failed to fetch metadata JSON from {url}: {e}")
+        return None
+    except (json.JSONDecodeError, IOError) as e:
+        print(f"Failed to save metadata JSON: {e}")
+        return None
 
 # -----------------------------
 # Database registration
@@ -498,7 +546,18 @@ def download_one(
 
             result["status"] = "ok"
             result["note"] = f"Downloaded {len(downloaded)}/{len(selected)} selected files."
-            
+
+            # Fetch metadata JSON from IA API
+            metadata_file = fetch_ia_metadata_json(
+                identifier=ia_row.identifier,
+                dest_dir=base_dir,
+                verbose=verbose
+            )
+            if metadata_file:
+                downloaded.append(metadata_file)
+                if verbose:
+                    print(f"Metadata JSON added to downloads: {metadata_file}")
+          
             # Register in database
             if enable_db:
                 container_id = register_container_in_db(row, dest_dir, downloaded, result["status"])
