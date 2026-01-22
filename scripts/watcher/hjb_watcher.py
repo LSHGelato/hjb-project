@@ -27,12 +27,11 @@ import sys
 import time
 import traceback
 import csv
+import subprocess
+import yaml
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple, List
-
-import yaml
-
 
 def utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -336,14 +335,6 @@ Output:
 - Script output captured and logged
 - Task result includes summary of what was generated
 """
-
-from __future__ import annotations
-
-import subprocess
-import sys
-from pathlib import Path
-from typing import Any, Dict, List, Tuple
-
 
 def task_stage1_generate_ia_tasks(
     manifest: Dict[str, Any],
