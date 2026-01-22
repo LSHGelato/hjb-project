@@ -549,7 +549,7 @@ def download_one(
 
             # Fetch metadata JSON from IA API
             metadata_file = fetch_ia_metadata_json(
-                identifier=ia_row.identifier,
+                identifier=row.identifier,
                 dest_dir=base_dir,
                 verbose=verbose
             )
