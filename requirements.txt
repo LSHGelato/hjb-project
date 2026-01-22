@@ -1,10 +1,12 @@
 # This file pins exact dependency versions for reproducible installs.
-# Generated initially for Python 3.12 on Windows.
-# Regenerate intentionally when dependencies change.
+# Generated for Python 3.12 on Windows.
+# Regenerate with: pip-compile requirements.in
 
 certifi==2024.12.14
 charset-normalizer==3.4.0
+click==8.1.7
 idna==3.7
+internetarchive==1.10.0
 lxml==5.2.2
 python-dateutil==2.9.0.post0
 pyyaml==6.0.2
