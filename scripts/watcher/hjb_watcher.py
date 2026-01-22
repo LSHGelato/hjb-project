@@ -30,6 +30,7 @@ import csv
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple, List
+from scripts.stage1.task_stage1_generate_ia_tasks import task_stage1_generate_ia_tasks
 
 import yaml
 
@@ -309,7 +310,6 @@ def is_orionmx_busy(flags_root: Path) -> bool:
             return True
     return False
 
-
 def execute_manifest_task(
     manifest: Dict[str, Any],
     task_id: str,
@@ -336,6 +336,9 @@ def execute_manifest_task(
 
     if task_type == "stage1.ia_download":
         return task_stage1_ia_download(manifest, task_id, flags_root)
+
+    if task_type == "stage1.generate_ia_tasks":
+        return task_stage1_generate_ia_tasks(manifest, task_id, flags_root)
     
     raise ValueError(f"Unknown task_type: {task_type}")
 
