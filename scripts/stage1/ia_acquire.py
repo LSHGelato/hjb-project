@@ -97,7 +97,9 @@ except ImportError:
 # -----------------------------
 # Tier definitions (customize)
 # -----------------------------
-# "Tier A" = core acquisition artifacts you likely want first.
+# Merged "Tier A + B" = comprehensive acquisition artifacts for full processing pipeline.
+# Core files: JP2 images, PDF reference, OCR text, page structure.
+# Supplementary: Metadata (XML and JSON), DjVu OCR alternatives.
 TIER_A_SUFFIXES = [
     "_jp2.zip",        # high-fidelity page images in a single archive
     ".pdf",            # convenient reading/preview + sometimes text layer
@@ -105,14 +107,15 @@ TIER_A_SUFFIXES = [
     "_scandata.xml",   # page numbering / structure metadata (when present)
 ]
 
-# "Tier B" = extra metadata / alternative OCR forms (optional).
 TIER_B_SUFFIXES = [
-    "_meta.xml",
-    "_json.json",
-    "_djvu.txt",
-    "_djvu.xml",
+    "_meta.xml",       # IA metadata in XML format
+    "_json.json",      # IA metadata in JSON format (preferred for parsing)
+    "_djvu.txt",       # DjVu OCR text (plain text fallback)
+    "_djvu.xml",       # DjVu OCR with structure (alternative to HOCR)
 ]
 
+# Combined tier for standard ingestion: get everything
+TIER_COMPREHENSIVE_SUFFIXES = TIER_A_SUFFIXES + TIER_B_SUFFIXES
 
 @dataclass(frozen=True)
 class IaRow:
