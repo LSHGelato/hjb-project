@@ -1,10 +1,11 @@
 # scripts/ops/hjb_supervisor.ps1
 # HJB Supervisor
-# - Watches for ops_update_watcher.flag OR ops_restart_watcher.flag in flags/pending
+# - Watches for ops_update_watcher.flag, ops_restart_watcher.flag, or ops_update_deps_watcher.flag in flags/pending
 # - Stops watcher using PID from heartbeat JSON
 # - For update: git pull --rebase origin main
+# - For update_deps: git pull --rebase origin main AND run pip install -r requirements.txt
 # - For restart: no git; just stop/start
-# - (optional) run doctor for both
+# - (optional) run doctor for all modes
 # - restarts watcher via wrapper script
 #
 # Intended to be run by Windows Task Scheduler on each machine.
@@ -314,6 +315,19 @@ function Git-PullRebase([string]$repoRoot) {
     Write-Log "Git update complete."
 }
 
+function Install-Requirements([string]$repoRoot, [string]$py) {
+    $reqFile = Join-Path $repoRoot "requirements.txt"
+    if (!(Test-Path $reqFile)) {
+        throw "requirements.txt not found at $reqFile"
+    }
+
+    Write-Log "Running pip install -r requirements.txt ..."
+    & $py -m pip install -r $reqFile --upgrade
+    if ($LASTEXITCODE -ne 0) { throw "pip install failed" }
+
+    Write-Log "pip install complete."
+}
+
 function Run-DoctorIfPresent([string]$repoRoot, [string]$py) {
     $doctor1 = Join-Path $repoRoot "scripts\ops\hjb_doctor.py"
     $doctor2 = Join-Path $repoRoot "scripts\hjb_doctor.py"
@@ -432,7 +446,8 @@ foreach ($p in @($flagsRoot, $pending, $processing, $completed, $failed)) {
 # Trigger file name (must NOT be .json and must NOT start with noop_)
 $triggers = @(
     @{ name = "ops_update_watcher.flag"; mode = "update" },
-    @{ name = "ops_restart_watcher.flag"; mode = "restart" }
+    @{ name = "ops_restart_watcher.flag"; mode = "restart" },
+    @{ name = "ops_update_deps_watcher.flag"; mode = "update_deps" }
 )
 
 $selected = $null
@@ -501,8 +516,7 @@ try {
             Stop-ProcessTree ([int]$owner.pid) "Lock-owner stop"
             $stopped = $true
         } else {
-            # For BOTH restart and update, proceed even if nothing is running.
-            # Update should still pull/rebase, then start watcher.
+            # For ALL modes (update, update_deps, restart), proceed even if nothing is running.
             Write-Log "No running watcher found to stop (no fresh heartbeat, no lock owner). Continuing with mode=$mode."
         }
     }
@@ -512,8 +526,11 @@ try {
 
     if ($mode -eq "update") {
         Git-PullRebase $repoRoot
+    } elseif ($mode -eq "update_deps") {
+        Git-PullRebase $repoRoot
+        Install-Requirements $repoRoot $py
     } else {
-        Write-Log "Restart mode: skipping git update."
+        Write-Log "Restart mode: skipping git update and pip install."
     }
 
     Run-DoctorIfPresent $repoRoot $py
@@ -526,7 +543,7 @@ try {
     Assert-WatcherRestarted $paths.heartbeat_path $poll
 
     # Mark trigger as done
-    $bucket = if ($mode -eq "update") { "ops_update_watcher" } else { "ops_restart_watcher" }
+    $bucket = if ($mode -eq "update") { "ops_update_watcher" } elseif ($mode -eq "update_deps") { "ops_update_deps_watcher" } else { "ops_restart_watcher" }
     $doneDir = Join-Path $completed $bucket
     New-Item -ItemType Directory -Force -Path $doneDir | Out-Null
     $donePath = Join-Path $doneDir "$triggerName.$computerName.done"
@@ -547,7 +564,7 @@ try {
 catch {
     $err = $_
     Write-Log "Update FAILED: $($err.Exception.Message)"
-    $bucket = if ($mode -eq "update") { "ops_update_watcher" } else { "ops_restart_watcher" }
+    $bucket = if ($mode -eq "update") { "ops_update_watcher" } elseif ($mode -eq "update_deps") { "ops_update_deps_watcher" } else { "ops_restart_watcher" }
     $failDir = Join-Path $failed $bucket
     New-Item -ItemType Directory -Force -Path $failDir | Out-Null
     $failPath = Join-Path $failDir "$triggerName.$computerName.failed"
