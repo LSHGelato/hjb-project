@@ -1,14 +1,18 @@
-# HJB top-level Python dependencies
-# This file is intentionally short and human-maintained.
-# Add entries only when the code explicitly requires them.
+# Core dependencies for HJB project
+# Pinned versions generated with pip-compile
+# Update with: pip-compile requirements.in
 
-# Configuration & utilities
-pyyaml
-python-dateutil
-tqdm
+# Internet Archive downloading
+internetarchive>=1.10.0
 
-# Networking / APIs
-requests
+# Config and data handling
+pyyaml>=6.0
+python-dateutil>=2.9.0
 
-# Parsing / XML / HTML (needed later for IA metadata, MediaWiki)
-lxml
+# HTTP and networking
+requests>=2.32.0
+urllib3>=2.0
+
+# Utilities
+tqdm>=4.65.0
+lxml>=5.0
