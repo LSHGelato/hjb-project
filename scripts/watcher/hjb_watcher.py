@@ -559,7 +559,7 @@ def task_stage1_ia_download(manifest: Dict[str, Any], task_id: str, flags_root: 
     elapsed = int(time.time() - started)
     
     status = download_result.get("status", "unknown")
-    if status not in ["ok", "partial"]:
+    if status not in ["ok", "partial", "skipped_already_present"]:
         raise RuntimeError(
             f"Download failed: {status}. "
             f"Note: {download_result.get('note', 'No details')}"
