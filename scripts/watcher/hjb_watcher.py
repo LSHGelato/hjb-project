@@ -383,7 +383,7 @@ def task_stage1_generate_ia_tasks(
     # Resolve output directory (relative to repo root if not absolute)
     out_dir = Path(output_dir)
     if not out_dir.is_absolute():
-        out_dir = repo_root / out_dir
+        out_dir = flags_root / out_dir
     
     # Ensure output directory exists
     out_dir.mkdir(parents=True, exist_ok=True)
