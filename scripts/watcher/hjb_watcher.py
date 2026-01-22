@@ -30,7 +30,6 @@ import csv
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple, List
-from scripts.stage1.task_stage1_generate_ia_tasks import task_stage1_generate_ia_tasks
 
 import yaml
 
@@ -309,6 +308,170 @@ def is_orionmx_busy(flags_root: Path) -> bool:
         if task_file.is_file() and "orionmx_" in task_file.name:
             return True
     return False
+
+"""
+Task handler: stage1.generate_ia_tasks
+
+Invokes the existing generate_ia_tasks.py script via subprocess.
+Allows remote task generation by dropping a flag in flags/pending/.
+
+Task manifest format:
+{
+  "task_type": "stage1.generate_ia_tasks",
+  "parameters": {
+    "identifiers_file": "config/american_architect_1876_full_year.txt",
+    "output_dir": "flags/staging",
+    "family": "American_Architect_family",
+    "max_tasks": null,
+    "include_index": false,
+    "include_supplemental": false,
+    "include_superceded": false,
+    "dry_run": false,
+    "verbose": true
+  }
+}
+
+Output:
+- Individual task JSON files written to output_dir (typically flags/staging/)
+- Script output captured and logged
+- Task result includes summary of what was generated
+"""
+
+from __future__ import annotations
+
+import subprocess
+import sys
+from pathlib import Path
+from typing import Any, Dict, List, Tuple
+
+
+def task_stage1_generate_ia_tasks(
+    manifest: Dict[str, Any],
+    task_id: str,
+    flags_root: Path,
+) -> Tuple[List[str], Dict[str, Any]]:
+    """
+    Execute stage1.generate_ia_tasks by invoking generate_ia_tasks.py script.
+    
+    Returns:
+        (outputs, metrics)
+    """
+    parameters = manifest.get("parameters") or {}
+    if not isinstance(parameters, dict):
+        raise ValueError("parameters must be an object (dict)")
+    
+    # Required parameters
+    identifiers_file = parameters.get("identifiers_file")
+    if not (isinstance(identifiers_file, str) and identifiers_file.strip()):
+        raise KeyError("parameters.identifiers_file must be a string")
+    
+    family = parameters.get("family")
+    if not (isinstance(family, str) and family.strip()):
+        raise KeyError("parameters.family must be a string")
+    
+    # Optional parameters with defaults
+    output_dir = parameters.get("output_dir", "flags/staging")
+    max_tasks = parameters.get("max_tasks")
+    include_index = parameters.get("include_index", False)
+    include_supplemental = parameters.get("include_supplemental", False)
+    include_superceded = parameters.get("include_superceded", False)
+    dry_run = parameters.get("dry_run", False)
+    verbose = parameters.get("verbose", False)
+    
+    # Resolve paths
+    repo_root = Path(__file__).resolve().parents[2] if "__file__" in globals() else Path.cwd()
+    
+    # Resolve identifiers file (relative to repo root if not absolute)
+    ident_path = Path(identifiers_file)
+    if not ident_path.is_absolute():
+        ident_path = repo_root / ident_path
+    
+    if not ident_path.is_file():
+        raise FileNotFoundError(f"Identifiers file not found: {ident_path}")
+    
+    # Resolve output directory (relative to repo root if not absolute)
+    out_dir = Path(output_dir)
+    if not out_dir.is_absolute():
+        out_dir = repo_root / out_dir
+    
+    # Ensure output directory exists
+    out_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Build command line for generate_ia_tasks.py
+    script_path = repo_root / "scripts" / "stage1" / "generate_ia_tasks.py"
+    if not script_path.is_file():
+        raise FileNotFoundError(f"generate_ia_tasks.py not found: {script_path}")
+    
+    cmd = [
+        sys.executable,
+        str(script_path),
+        "--identifiers", str(ident_path),
+        "--output-dir", str(out_dir),
+        "--family", family,
+    ]
+    
+    if max_tasks is not None:
+        cmd.extend(["--max-tasks", str(max_tasks)])
+    
+    if include_index:
+        cmd.append("--include-index")
+    
+    if include_supplemental:
+        cmd.append("--include-supplemental")
+    
+    if include_superceded:
+        cmd.append("--include-superceded")
+    
+    if dry_run:
+        cmd.append("--dry-run")
+    
+    if verbose:
+        cmd.append("--verbose")
+    
+    # Execute script
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=300,  # 5 minute timeout
+        )
+    except subprocess.TimeoutExpired:
+        raise RuntimeError(f"generate_ia_tasks.py timed out after 5 minutes")
+    except Exception as e:
+        raise RuntimeError(f"Failed to execute generate_ia_tasks.py: {e}")
+    
+    # Check result
+    if result.returncode != 0:
+        error_msg = result.stderr or result.stdout or "Unknown error"
+        raise RuntimeError(
+            f"generate_ia_tasks.py exited with code {result.returncode}:\n{error_msg}"
+        )
+    
+    # Parse output to extract counts
+    output_text = result.stdout
+    
+    # Count generated files in output directory
+    generated_files = list(out_dir.glob("*.json"))
+    
+    # Prepare outputs
+    outputs = [str(out_dir)]
+    
+    # Prepare metrics
+    metrics = {
+        "identifiers_file": str(ident_path),
+        "output_directory": str(out_dir),
+        "family": family,
+        "max_tasks": max_tasks,
+        "include_index": include_index,
+        "include_supplemental": include_supplemental,
+        "include_superceded": include_superceded,
+        "dry_run": dry_run,
+        "generated_task_files": len(generated_files),
+        "script_output_lines": len(output_text.splitlines()),
+    }
+    
+    return outputs, metrics
 
 def execute_manifest_task(
     manifest: Dict[str, Any],
