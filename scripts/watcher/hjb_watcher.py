@@ -494,7 +494,7 @@ import subprocess
 
 def task_stage1_ia_download(manifest: Dict[str, Any], task_id: str, flags_root: Path) -> Tuple[List[str], Dict[str, Any]]:
     parameters = manifest.get("parameters") or {}
-    if not isinstance(payload, dict):
+    if not isinstance(parameters, dict):
         raise ValueError("parameters must be an object (dict)")
 
     ia_identifier = parameters.get("ia_identifier")
