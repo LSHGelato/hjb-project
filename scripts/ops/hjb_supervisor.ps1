@@ -361,6 +361,82 @@ function Install-Requirements([string]$repoRoot, [string]$py) {
     Write-Log "pip install complete."
 }
 
+function Move-FileOrFolder([string]$sourcePath, [string]$destPath, [bool]$backupExisting = $true) {
+    <#
+    .SYNOPSIS
+    Move a file or folder from source to destination with optional backup.
+    
+    .PARAMETER sourcePath
+    Full path to source file or folder
+    
+    .PARAMETER destPath
+    Full path to destination (if folder, parent must exist; file will be moved into it if it's a directory)
+    
+    .PARAMETER backupExisting
+    If destination exists, back it up to .backup before overwriting (default: $true)
+    #>
+    
+    Write-Log "Moving: $sourcePath -> $destPath"
+    
+    if (!(Test-Path $sourcePath)) {
+        Write-Log "Source not found: $sourcePath"
+        return $false
+    }
+    
+    $isSourceFile = (Get-Item -LiteralPath $sourcePath) -is [System.IO.FileInfo]
+    
+    # If destination is a directory, append source filename
+    if ((Test-Path $destPath) -and (Get-Item -LiteralPath $destPath) -is [System.IO.DirectoryInfo]) {
+        $sourceName = Split-Path -Leaf $sourcePath
+        $destPath = Join-Path $destPath $sourceName
+    }
+    
+    # Handle backup of existing destination
+    if ((Test-Path $destPath) -and $backupExisting) {
+        $backupPath = "$destPath.backup"
+        Write-Log "Destination exists, backing up to: $backupPath"
+        if (Test-Path $backupPath) {
+            Remove-Item -LiteralPath $backupPath -Force -Recurse -ErrorAction SilentlyContinue
+        }
+        Move-Item -LiteralPath $destPath -Destination $backupPath -Force
+    } elseif (Test-Path $destPath) {
+        Write-Log "Destination exists and backup disabled. Removing: $destPath"
+        Remove-Item -LiteralPath $destPath -Force -Recurse
+    }
+    
+    # Ensure parent directory exists
+    $parentDir = Split-Path -Parent $destPath
+    if (![string]::IsNullOrWhiteSpace($parentDir) -and !(Test-Path $parentDir)) {
+        Ensure-Dir $parentDir
+    }
+    
+    # Move the file or folder
+    Move-Item -LiteralPath $sourcePath -Destination $destPath -Force
+    
+    # Verify
+    if (!(Test-Path $destPath)) {
+        throw "Failed to verify destination after move: $destPath"
+    }
+    
+    Write-Log "Move successful: $destPath"
+    return $true
+}
+
+function Move-ConfigToFolder([string]$repoRoot) {
+    <#
+    .SYNOPSIS
+    Move config.yaml from repo root to config/ subfolder (legacy helper).
+    Uses generic Move-FileOrFolder function.
+    #>
+    $srcFile = Join-Path $repoRoot "config.yaml"
+    $dstDir = Join-Path $repoRoot "config"
+    
+    $success = Move-FileOrFolder -sourcePath $srcFile -destPath $dstDir -backupExisting $true
+    if (!$success) {
+        throw "Failed to move config.yaml to config/ folder"
+    }
+}
+
 function Run-DoctorIfPresent([string]$repoRoot, [string]$py) {
     $doctor1 = Join-Path $repoRoot "scripts\ops\hjb_doctor.py"
     $doctor2 = Join-Path $repoRoot "scripts\hjb_doctor.py"
@@ -480,7 +556,8 @@ foreach ($p in @($flagsRoot, $pending, $processing, $completed, $failed)) {
 $triggers = @(
     @{ name = "ops_update_watcher.flag"; mode = "update" },
     @{ name = "ops_restart_watcher.flag"; mode = "restart" },
-    @{ name = "ops_update_deps_watcher.flag"; mode = "update_deps" }
+    @{ name = "ops_update_deps_watcher.flag"; mode = "update_deps" },
+    @{ name = "ops_move_config.flag"; mode = "move_config" }
 )
 
 $selected = $null
@@ -562,21 +639,27 @@ try {
     } elseif ($mode -eq "update_deps") {
         Git-PullRebase $repoRoot
         Install-Requirements $repoRoot $py
+    } elseif ($mode -eq "move_config") {
+        Move-ConfigToFolder $repoRoot
+        Write-Log "Config move complete. Not restarting watcher."
     } else {
         Write-Log "Restart mode: skipping git update and pip install."
     }
 
-    Run-DoctorIfPresent $repoRoot $py
+    # Only restart watcher if not a pure maintenance operation
+    if ($mode -ne "move_config") {
+        Run-DoctorIfPresent $repoRoot $py
 
-    # Start watcher directly (more reliable than hidden wrapper) and verify heartbeat advances.
-    $poll = 30
-    $envPoll = $env:HJB_POLL_SECONDS
-    if (![string]::IsNullOrWhiteSpace($envPoll)) { $poll = [int]$envPoll }
-    Start-WatcherDirect $repoRoot $py $watcherId $poll $logsRoot
-    Assert-WatcherRestarted $paths.heartbeat_path $poll
+        # Start watcher directly (more reliable than hidden wrapper) and verify heartbeat advances.
+        $poll = 30
+        $envPoll = $env:HJB_POLL_SECONDS
+        if (![string]::IsNullOrWhiteSpace($envPoll)) { $poll = [int]$envPoll }
+        Start-WatcherDirect $repoRoot $py $watcherId $poll $logsRoot
+        Assert-WatcherRestarted $paths.heartbeat_path $poll
+    }
 
     # Mark trigger as done
-    $bucket = if ($mode -eq "update") { "ops_update_watcher" } elseif ($mode -eq "update_deps") { "ops_update_deps_watcher" } else { "ops_restart_watcher" }
+    $bucket = if ($mode -eq "update") { "ops_update_watcher" } elseif ($mode -eq "update_deps") { "ops_update_deps_watcher" } elseif ($mode -eq "move_config") { "ops_move_config" } else { "ops_restart_watcher" }
     $doneDir = Join-Path $completed $bucket
     New-Item -ItemType Directory -Force -Path $doneDir | Out-Null
     $donePath = Join-Path $doneDir "$triggerName.$computerName.done"
@@ -597,7 +680,7 @@ try {
 catch {
     $err = $_
     Write-Log "Update FAILED: $($err.Exception.Message)"
-    $bucket = if ($mode -eq "update") { "ops_update_watcher" } elseif ($mode -eq "update_deps") { "ops_update_deps_watcher" } else { "ops_restart_watcher" }
+    $bucket = if ($mode -eq "update") { "ops_update_watcher" } elseif ($mode -eq "update_deps") { "ops_update_deps_watcher" } elseif ($mode -eq "move_config") { "ops_move_config" } else { "ops_restart_watcher" }
     $failDir = Join-Path $failed $bucket
     New-Item -ItemType Directory -Force -Path $failDir | Out-Null
     $failPath = Join-Path $failDir "$triggerName.$computerName.failed"
