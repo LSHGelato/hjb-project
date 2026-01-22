@@ -23,6 +23,8 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import io
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 from datetime import datetime, timezone
 from pathlib import Path
 
