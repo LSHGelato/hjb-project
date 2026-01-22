@@ -322,8 +322,41 @@ function Install-Requirements([string]$repoRoot, [string]$py) {
     }
 
     Write-Log "Running pip install -r requirements.txt ..."
-    & $py -m pip install -r $reqFile --upgrade
-    if ($LASTEXITCODE -ne 0) { throw "pip install failed" }
+    Write-Log "  reqFile: $reqFile"
+    Write-Log "  python: $py"
+    Write-Log "  repoRoot: $repoRoot"
+    
+    # Verify requirements.txt exists and is readable
+    if (!(Test-Path $reqFile -PathType Leaf)) {
+        throw "requirements.txt is not a file: $reqFile"
+    }
+    
+    $reqContent = Get-Content -LiteralPath $reqFile -Raw -ErrorAction SilentlyContinue
+    Write-Log "requirements.txt content:`n$reqContent"
+    
+    # Capture pip output to diagnose failures
+    $pipOut = New-TempFilePath "pip_install" ".log"
+    $pipErr = New-TempFilePath "pip_install_err" ".log"
+    
+    Write-Log "Running: & $py -m pip install -r $reqFile --upgrade"
+    & $py -m pip install -r $reqFile --upgrade -v > $pipOut 2> $pipErr
+    $exitCode = $LASTEXITCODE
+    
+    # Log output to console
+    $outContent = Get-Content -LiteralPath $pipOut -Raw -ErrorAction SilentlyContinue
+    $errContent = Get-Content -LiteralPath $pipErr -Raw -ErrorAction SilentlyContinue
+    
+    Write-Log "pip exit code: $exitCode"
+    Write-Log "pip stdout:`n$outContent"
+    Write-Log "pip stderr:`n$errContent"
+    
+    # Cleanup temp files
+    Remove-Item -LiteralPath $pipOut -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $pipErr -Force -ErrorAction SilentlyContinue
+    
+    if ($exitCode -ne 0) {
+        throw "pip install failed with exit code $exitCode.`nstdout: $outContent`nstderr: $errContent"
+    }
 
     Write-Log "pip install complete."
 }
