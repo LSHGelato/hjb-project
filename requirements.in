@@ -3,7 +3,7 @@
 # Update with: pip-compile requirements.in
 
 # Internet Archive downloading
-internetarchive>=1.10.0
+internetarchive>=5.7.0
 
 # Config and data handling
 pyyaml>=6.0
