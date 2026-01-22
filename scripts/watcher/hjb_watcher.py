@@ -52,22 +52,38 @@ def load_yaml(path: Path) -> Dict[str, Any]:
 
 
 def get_config(repo_root: Path, config_path: Optional[str]) -> Dict[str, Any]:
+    """
+    Load configuration from YAML file.
+    Search order:
+    1. If config_path provided, use that
+    2. config/config.yaml (preferred)
+    3. config.yaml at repo root (fallback for moved configs)
+    4. config/config.example.yaml (example)
+    """
     if config_path:
         p = Path(config_path)
         if not p.is_file():
             raise FileNotFoundError(f"--config not found: {p}")
         return load_yaml(p)
-
+    
+    # Try config/config.yaml first (standard location)
     cfg = repo_root / "config" / "config.yaml"
     if cfg.is_file():
         return load_yaml(cfg)
-
+    
+    # Fallback: check root for config.yaml
+    cfg_root = repo_root / "config.yaml"
+    if cfg_root.is_file():
+        return load_yaml(cfg_root)
+    
+    # Last resort: example config
     cfg_ex = repo_root / "config" / "config.example.yaml"
     if cfg_ex.is_file():
         return load_yaml(cfg_ex)
-
-    raise FileNotFoundError("Neither config/config.yaml nor config/config.example.yaml found.")
-
+    
+    raise FileNotFoundError(
+        "Config not found. Checked: config/config.yaml, config.yaml (root), config/config.example.yaml"
+    )
 
 def require_dir(path: Path, label: str) -> None:
     if not path.exists():
