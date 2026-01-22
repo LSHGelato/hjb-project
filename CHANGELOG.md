@@ -12,6 +12,10 @@ and adheres to **Semantic Versioning** (https://semver.org/).
 
 ### Added
 
+- New supervisor trigger `ops_update_deps_watcher.flag` for pulling code + installing dependencies + restarting watcher
+- `internetarchive` package (v1.10.0) to requirements for IA downloads in stage1.ia_download
+- `Install-Requirements()` function in supervisor for robustly installing from requirements.txt
+
 #### Database & Schema (HJB-SCHEMA)
 - Publication families table (`publication_families_t`) with `family_root`, `family_code`, `display_name` for grouping related journals/books across naming changes
 - Publication titles table (`publication_titles_t`) with publisher, location, run dates, and variant names
@@ -58,6 +62,9 @@ and adheres to **Semantic Versioning** (https://semver.org/).
 
 ### Changed
 
+- requirements.txt now includes internetarchive and click (transitive dependency)
+- Supervisor supports three trigger modes: update (git only), update_deps (git + pip), restart (no changes)
+
 #### Heartbeat Standardization
 - Removed special case for `orionmx_1` heartbeat; all watchers now use consistent `watcher_heartbeat_<watcher_id>.json` naming
 - Applies to both watcher and supervisor heartbeats for clarity in multi-watcher scenarios
@@ -72,6 +79,8 @@ and adheres to **Semantic Versioning** (https://semver.org/).
 - Works & occurrences model separates intellectual content from physical instances
 
 ### Fixed
+
+- Missing internetarchive package was blocking stage1.ia_download task handler
 
 #### Configuration Path Resolution
 - Clarified that watcher and supervisor both resolve `state_root` from config, supporting both `cfg.paths.state_root` and `cfg.state_root` styles
