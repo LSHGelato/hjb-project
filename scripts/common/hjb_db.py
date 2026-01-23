@@ -13,10 +13,11 @@ See /mnt/user-data/uploads/ for proof
 
 Configuration:
 Reads from environment variables (auto-loaded from .env) or config.yaml:
-  - HJB_DB_HOST
-  - HJB_DB_USER
-  - HJB_DB_PASSWORD (required)
-  - HJB_DB_NAME
+  - HJB_MYSQL_HOST
+  - HJB_MYSQL_PORT
+  - HJB_MYSQL_USER
+  - HJB_MYSQL_PASSWORD (required)
+  - HJB_MYSQL_DATABASE
 
 Usage:
   from hjb_db import insert_container, get_container_by_source
@@ -99,15 +100,15 @@ def get_db_config() -> Dict[str, str]:
 
         return default
     
-    host = pick("HJB_DB_HOST", "host", "localhost")
-    user = pick("HJB_DB_USER", "user", "root")
-    password = pick("HJB_DB_PASSWORD", "password", "")
-    database = pick("HJB_DB_NAME", "database", "raneywor_historicaljournals")
-    port = pick("HJB_DB_PORT", "port", "3306")
-    
+    host = pick("HJB_MYSQL_HOST", "host", "localhost")
+    user = pick("HJB_MYSQL_USER", "user", "root")
+    password = pick("HJB_MYSQL_PASSWORD", "password", "")
+    database = pick("HJB_MYSQL_DATABASE", "database", "raneywor_historicaljournals")
+    port = pick("HJB_MYSQL_PORT", "port", "3306")
+
     if not password:
         raise ValueError(
-            "Database password required. Set HJB_DB_PASSWORD environment variable "
+            "Database password required. Set HJB_MYSQL_PASSWORD environment variable "
             "or database.password in config.yaml"
         )
     

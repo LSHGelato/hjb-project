@@ -16,7 +16,7 @@ Usage:
     python scripts/stage1/register_existing_downloads.py --family American_Architect_family --verbose --log-dir logs
 
 Prerequisites:
-    - Database access configured (HJB_DB_PASSWORD environment variable or config.yaml)
+    - Database access configured (HJB_MYSQL_PASSWORD environment variable or config.yaml)
     - NAS access to Raw_Input/0110_Internet_Archive/SIM/
     - Publication family directory exists with downloaded items
 """
@@ -278,7 +278,7 @@ Examples:
         return 1
 
     if hjb_db is None:
-        logger.error("Database connection failed. Check HJB_DB_PASSWORD environment variable.")
+        logger.error("Database connection failed. Check HJB_MYSQL_PASSWORD environment variable.")
         return 1
 
     # Verify base path exists

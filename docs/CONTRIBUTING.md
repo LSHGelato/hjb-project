@@ -45,10 +45,11 @@ Set these on your development machine:
 
 ```powershell
 # Database credentials (use app user, not admin)
-setx HJB_DB_HOST "your.mysql.host" /M
-setx HJB_DB_USER "raneywor_hjb_app" /M
-setx HJB_DB_PASSWORD "your_password_here" /M
-setx HJB_DB_NAME "raneywor_hjbproject" /M
+setx HJB_MYSQL_HOST "your.mysql.host" /M
+setx HJB_MYSQL_PORT "3306" /M
+setx HJB_MYSQL_USER "raneywor_hjb_app" /M
+setx HJB_MYSQL_PASSWORD "your_password_here" /M
+setx HJB_MYSQL_DATABASE "raneywor_hjbproject" /M
 
 # Optional: custom paths
 setx HJB_REPO_ROOT "C:\hjb-project" /M

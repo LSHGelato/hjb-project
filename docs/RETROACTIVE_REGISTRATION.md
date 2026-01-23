@@ -13,7 +13,7 @@ The retroactive registration system allows you to:
 
 ### 1. Database Access
 - MySQL database `raneywor_hjbproject` must be accessible
-- Set `HJB_DB_PASSWORD` environment variable, or configure in `config/config.yaml`
+- Set `HJB_MYSQL_PASSWORD` environment variable, or configure in `config/config.yaml`
 
 ### 2. NAS Access
 - NAS must be mounted at standard path: `\\RaneyHQ\Michael\02_Projects\Historical_Journals_And_Books\`
@@ -140,7 +140,7 @@ pip install mysql-connector-python PyYAML
 
 ### "Database connection failed"
 
-1. Check `HJB_DB_PASSWORD` environment variable is set
+1. Check `HJB_MYSQL_PASSWORD` environment variable is set
 2. Verify database host is accessible
 3. Check `config/config.yaml` database settings
 
