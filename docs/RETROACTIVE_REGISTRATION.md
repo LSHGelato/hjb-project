@@ -29,10 +29,10 @@ The retroactive registration system allows you to:
 
 ```bash
 # Preview what would be registered (dry run)
-python scripts/register_existing_downloads.py --family American_Architect_family --dry-run
+python scripts/stage1/register_existing_downloads.py --family American_Architect_family --dry-run
 
 # Actually register items
-python scripts/register_existing_downloads.py --family American_Architect_family
+python scripts/stage1/register_existing_downloads.py --family American_Architect_family
 ```
 
 ### Options
@@ -49,14 +49,14 @@ python scripts/register_existing_downloads.py --family American_Architect_family
 
 ```bash
 # Verbose output
-python scripts/register_existing_downloads.py --family American_Architect_family --verbose
+python scripts/stage1/register_existing_downloads.py --family American_Architect_family --verbose
 
 # Custom base path (e.g., local copy of IA downloads)
-python scripts/register_existing_downloads.py --family American_Architect_family \
+python scripts/stage1/register_existing_downloads.py --family American_Architect_family \
     --base-path "D:\IA_Downloads\SIM"
 
 # Custom log directory
-python scripts/register_existing_downloads.py --family American_Architect_family \
+python scripts/stage1/register_existing_downloads.py --family American_Architect_family \
     --log-dir "C:\logs\hjb"
 ```
 
@@ -171,6 +171,7 @@ The script is idempotent - it's safe to run multiple times:
 
 ## Related Files
 
+- `scripts/stage1/register_existing_downloads.py` - Bulk registration CLI script
 - `scripts/stage1/ia_acquire.py` - Core acquisition and registration functions
 - `scripts/common/hjb_db.py` - Database operations
 - `config/config.yaml` - Database configuration

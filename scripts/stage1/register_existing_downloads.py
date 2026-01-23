@@ -7,13 +7,13 @@ Scans a publication family directory and registers any items not already in the 
 
 Usage:
     # Dry run (preview without database changes)
-    python scripts/register_existing_downloads.py --family American_Architect_family --dry-run
+    python scripts/stage1/register_existing_downloads.py --family American_Architect_family --dry-run
 
     # Actually register
-    python scripts/register_existing_downloads.py --family American_Architect_family
+    python scripts/stage1/register_existing_downloads.py --family American_Architect_family
 
     # Verbose mode with custom log directory
-    python scripts/register_existing_downloads.py --family American_Architect_family --verbose --log-dir logs
+    python scripts/stage1/register_existing_downloads.py --family American_Architect_family --verbose --log-dir logs
 
 Prerequisites:
     - Database access configured (HJB_DB_PASSWORD environment variable or config.yaml)
@@ -33,7 +33,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 # Add repo root to path for imports
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
@@ -228,13 +228,13 @@ def main() -> int:
         epilog="""
 Examples:
     # Preview what would be registered
-    python scripts/register_existing_downloads.py --family American_Architect_family --dry-run
+    python scripts/stage1/register_existing_downloads.py --family American_Architect_family --dry-run
 
     # Register all items in a family
-    python scripts/register_existing_downloads.py --family American_Architect_family
+    python scripts/stage1/register_existing_downloads.py --family American_Architect_family
 
     # Verbose output with custom base path
-    python scripts/register_existing_downloads.py --family American_Architect_family -v \\
+    python scripts/stage1/register_existing_downloads.py --family American_Architect_family -v \\
         --base-path "D:\\IA_Downloads\\SIM"
         """,
     )

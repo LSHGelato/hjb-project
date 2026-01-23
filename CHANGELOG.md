@@ -18,7 +18,7 @@ and adheres to **Semantic Versioning** (https://semver.org/).
   - Parses `_scandata.xml` for page count
   - Scans directory for available file types (JP2, PDF, HOCR, etc.)
 - `register_container_from_local()` function for registering previously downloaded items
-- `scripts/register_existing_downloads.py` - bulk registration script for existing IA downloads
+- `scripts/stage1/register_existing_downloads.py` - bulk registration script for existing IA downloads
   - Family-based directory scanning
   - Duplicate detection (skips already-registered items)
   - Dry-run mode for previewing changes
