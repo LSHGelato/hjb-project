@@ -77,6 +77,22 @@ from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Iterable, List, Optional, Tuple
 
+# Error Checking
+print(f"[ia_acquire] Attempting to import hjb_db...", file=sys.stderr)
+try:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    from scripts.common import hjb_db
+    DB_AVAILABLE = True
+    print(f"[ia_acquire] DB_AVAILABLE=True", file=sys.stderr)
+except ImportError as e:
+    DB_AVAILABLE = False
+    hjb_db = None
+    print(f"[ia_acquire] DB_AVAILABLE=False - ImportError: {e}", file=sys.stderr)
+except Exception as e:
+    DB_AVAILABLE = False
+    hjb_db = None
+    print(f"[ia_acquire] DB_AVAILABLE=False - Exception: {e}", file=sys.stderr)
+  
 # External dependency
 try:
     import internetarchive  # type: ignore
