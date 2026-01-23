@@ -28,6 +28,7 @@ import io
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
 
 
 # Pre-compiled regex for identifier filtering (case-insensitive)
@@ -86,7 +87,7 @@ def generate_task_flag(
     Generate a single task flag JSON for this identifier.
     """
     task_id = f"{utc_now_compact()}_{identifier}"
-    
+
     return {
         "schema": "hjb.task.v1",
         "task_id": task_id,
@@ -105,6 +106,190 @@ def generate_task_flag(
             "description": f"Download IA item: {identifier}",
         },
     }
+
+
+def generate_tasks(
+    identifiers_file: Path,
+    output_dir: Path,
+    family: str,
+    max_tasks: Optional[int] = None,
+    include_index: bool = False,
+    include_supplemental: bool = False,
+    include_superceded: bool = False,
+    dry_run: bool = False,
+    verbose: bool = False,
+) -> Tuple[List[str], Dict[str, Any]]:
+    """
+    Core task generation logic.
+
+    Args:
+        identifiers_file: Path to file with IA identifiers
+        output_dir: Directory to write task flag JSON files
+        family: Publication family name
+        max_tasks: Limit to first N tasks (None = all)
+        include_index: Include _index identifiers
+        include_supplemental: Include _supplemental identifiers
+        include_superceded: Include _superceded identifiers
+        dry_run: Don't actually write files
+        verbose: Print progress
+
+    Returns:
+        (outputs, metrics) tuple
+    """
+    if not identifiers_file.is_file():
+        raise FileNotFoundError(f"Identifiers file not found: {identifiers_file}")
+
+    if not dry_run:
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Parse identifiers
+    all_identifiers = parse_identifiers(identifiers_file)
+    if verbose:
+        print(f"[*] Parsed {len(all_identifiers)} identifiers from {identifiers_file}")
+
+    # Filter (unless overridden)
+    if not include_index and not include_supplemental and not include_superceded:
+        filtered = filter_identifiers(all_identifiers)
+        skipped = len(all_identifiers) - len(filtered)
+        if verbose:
+            print(f"[*] Filtered to {len(filtered)} regular issues (skipped {skipped})")
+        identifiers = filtered
+    else:
+        identifiers = all_identifiers
+        if verbose:
+            print(f"[*] Using all {len(identifiers)} identifiers (filter disabled)")
+
+    # Limit if requested
+    if max_tasks:
+        identifiers = identifiers[:max_tasks]
+        if verbose:
+            print(f"[*] Limited to first {len(identifiers)} tasks")
+
+    # Generate task flags
+    total = len(identifiers)
+    created_count = 0
+    failed_count = 0
+    output_files: List[str] = []
+
+    for i, identifier in enumerate(identifiers, 1):
+        try:
+            task = generate_task_flag(identifier, family, i, total)
+
+            if dry_run:
+                if verbose:
+                    print(f"[DRY] Task {i}/{total}: {task['task_id']}")
+            else:
+                output_path = output_dir / f"{task['task_id']}.json"
+                output_path.write_text(
+                    json.dumps(task, indent=2, sort_keys=True),
+                    encoding="utf-8",
+                )
+                output_files.append(str(output_path))
+                created_count += 1
+                if verbose:
+                    print(f"[OK] Task {i}/{total}: {output_path.name}")
+
+        except Exception as ex:
+            print(f"[ERROR] Task {i}/{total}: {ex}", file=sys.stderr)
+            failed_count += 1
+
+    outputs = [str(output_dir)]
+    metrics = {
+        "identifiers_file": str(identifiers_file),
+        "output_directory": str(output_dir),
+        "family": family,
+        "max_tasks": max_tasks,
+        "include_index": include_index,
+        "include_supplemental": include_supplemental,
+        "include_superceded": include_superceded,
+        "dry_run": dry_run,
+        "total_identifiers": len(all_identifiers),
+        "filtered_identifiers": total,
+        "generated_task_files": created_count,
+        "failed_count": failed_count,
+    }
+
+    return outputs, metrics
+
+
+def execute_from_manifest(
+    manifest: Dict[str, Any],
+    task_id: str,
+    flags_root: Path,
+) -> Tuple[List[str], Dict[str, Any]]:
+    """
+    Execute task generation from watcher manifest.
+
+    Manifest format:
+    {
+        "task_type": "stage1.generate_ia_tasks",
+        "parameters": {
+            "identifiers_file": "config/american_architect_1876_full_year.txt",
+            "output_dir": "flags/staging",
+            "family": "American_Architect_family",
+            "max_tasks": null,
+            "include_index": false,
+            "include_supplemental": false,
+            "include_superceded": false,
+            "dry_run": false,
+            "verbose": true
+        }
+    }
+
+    Args:
+        manifest: Task manifest dict
+        task_id: Unique task identifier
+        flags_root: Path to flags directory
+
+    Returns:
+        (outputs, metrics) tuple
+    """
+    parameters = manifest.get("parameters") or {}
+    if not isinstance(parameters, dict):
+        raise ValueError("parameters must be an object (dict)")
+
+    # Required parameters
+    identifiers_file = parameters.get("identifiers_file")
+    if not (isinstance(identifiers_file, str) and identifiers_file.strip()):
+        raise KeyError("parameters.identifiers_file must be a string")
+
+    family = parameters.get("family")
+    if not (isinstance(family, str) and family.strip()):
+        raise KeyError("parameters.family must be a string")
+
+    # Optional parameters with defaults
+    output_dir = parameters.get("output_dir", "staging")
+    max_tasks = parameters.get("max_tasks")
+    include_index = parameters.get("include_index", False)
+    include_supplemental = parameters.get("include_supplemental", False)
+    include_superceded = parameters.get("include_superceded", False)
+    dry_run = parameters.get("dry_run", False)
+    verbose = parameters.get("verbose", True)
+
+    # Resolve paths
+    repo_root = Path(__file__).resolve().parents[2]
+
+    # Resolve identifiers file (relative to repo root if not absolute)
+    ident_path = Path(identifiers_file)
+    if not ident_path.is_absolute():
+        ident_path = repo_root / ident_path
+
+    # Resolve output directory (relative to flags_root if not absolute)
+    out_dir = Path(output_dir)
+    if not out_dir.is_absolute():
+        out_dir = flags_root / out_dir
+
+    return generate_tasks(
+        identifiers_file=ident_path,
+        output_dir=out_dir,
+        family=family,
+        max_tasks=max_tasks,
+        include_index=include_index,
+        include_supplemental=include_supplemental,
+        include_superceded=include_superceded,
+        dry_run=dry_run,
+        verbose=verbose,
+    )
 
 
 def main() -> int:

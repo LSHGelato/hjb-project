@@ -75,7 +75,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 # Error Checking
 print(f"[ia_acquire] Attempting to import hjb_db...", file=sys.stderr)
@@ -588,6 +588,113 @@ def download_one(
     result["status"] = "error"
     result["note"] = "Unexpected fallthrough."
     return result
+
+
+def execute_from_manifest(
+    manifest: Dict[str, Any],
+    task_id: str,
+    flags_root: Path,
+) -> Tuple[List[str], Dict[str, Any]]:
+    """
+    Execute IA download task from watcher manifest.
+
+    Manifest format:
+    {
+        "task_type": "stage1.ia_download",
+        "parameters": {
+            "ia_identifier": "sim_american-architect_1900-01-01_1_1",
+            "family": "American_Architect_family"
+        }
+    }
+
+    Args:
+        manifest: Task manifest dict
+        task_id: Unique task identifier
+        flags_root: Path to flags directory
+
+    Returns:
+        (outputs, metrics) tuple
+    """
+    import yaml
+
+    parameters = manifest.get("parameters") or {}
+    if not isinstance(parameters, dict):
+        raise ValueError("parameters must be an object (dict)")
+
+    # Required: ia_identifier
+    ia_identifier = parameters.get("ia_identifier")
+    if not (isinstance(ia_identifier, str) and ia_identifier.strip()):
+        raise KeyError("parameters.ia_identifier must be a string")
+    ia_identifier = ia_identifier.strip()
+
+    # Optional: family (default to "Unknown")
+    family = parameters.get("family", "Unknown")
+    if isinstance(family, str):
+        family = family.strip() or "Unknown"
+
+    # Get repo root and config
+    repo_root = Path(__file__).resolve().parents[2]
+
+    # Load config to get raw_input path
+    cfg_path = repo_root / "config" / "config.yaml"
+    if not cfg_path.is_file():
+        cfg_path = repo_root / "config" / "config.example.yaml"
+
+    if cfg_path.is_file():
+        with cfg_path.open("r", encoding="utf-8") as f:
+            cfg = yaml.safe_load(f) or {}
+    else:
+        cfg = {}
+
+    storage = cfg.get("storage", {})
+    raw_input_path = storage.get("raw_input")
+
+    if not raw_input_path:
+        # Fallback to standard location
+        raw_input_path = str(repo_root / "01_Research" / "Historical_Journals_Inputs")
+
+    base_dir = Path(raw_input_path) / "0110_Internet_Archive"
+
+    # Prepare IaRow
+    ia_row = IaRow(
+        collection="SIM",
+        family=family,
+        identifier=ia_identifier,
+    )
+
+    # Download
+    started = time.time()
+    download_result = download_one(
+        row=ia_row,
+        base_dir=base_dir,
+        suffixes=TIER_COMPREHENSIVE_SUFFIXES,
+        max_retries=3,
+        retry_sleep=2.0,
+        verbose=True,
+        enable_db=DB_AVAILABLE,
+    )
+    elapsed = int(time.time() - started)
+
+    status = download_result.get("status", "unknown")
+    if status not in ["ok", "partial", "skipped_already_present"]:
+        raise RuntimeError(
+            f"Download failed: {status}. "
+            f"Note: {download_result.get('note', 'No details')}"
+        )
+
+    outputs = [download_result.get("dest_dir", "")]
+    metrics = {
+        "identifier": ia_identifier,
+        "family": family,
+        "status": status,
+        "duration_seconds": elapsed,
+        "file_count": len(download_result.get("downloaded", [])),
+        "container_id": download_result.get("container_id"),
+        "downloaded_files": download_result.get("downloaded", []),
+        "missing_suffixes": download_result.get("missing_suffixes", []),
+    }
+
+    return outputs, metrics
 
 
 def main() -> int:

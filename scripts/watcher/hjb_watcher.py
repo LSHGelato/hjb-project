@@ -26,12 +26,20 @@ import socket
 import sys
 import time
 import traceback
-import csv
-import subprocess
 import yaml
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple, List
+
+# Add repo root to path for imports
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+# Import task handlers from stage1 scripts
+from scripts.stage1 import generate_ia_tasks
+from scripts.stage1 import generate_inventory
+from scripts.stage1 import ia_acquire
 
 def utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -309,161 +317,6 @@ def is_orionmx_busy(flags_root: Path) -> bool:
             return True
     return False
 
-"""
-Task handler: stage1.generate_ia_tasks
-
-Invokes the existing generate_ia_tasks.py script via subprocess.
-Allows remote task generation by dropping a flag in flags/pending/.
-
-Task manifest format:
-{
-  "task_type": "stage1.generate_ia_tasks",
-  "parameters": {
-    "identifiers_file": "config/american_architect_1876_full_year.txt",
-    "output_dir": "flags/staging",
-    "family": "American_Architect_family",
-    "max_tasks": null,
-    "include_index": false,
-    "include_supplemental": false,
-    "include_superceded": false,
-    "dry_run": false,
-    "verbose": true
-  }
-}
-
-Output:
-- Individual task JSON files written to output_dir (typically flags/staging/)
-- Script output captured and logged
-- Task result includes summary of what was generated
-"""
-
-def task_stage1_generate_ia_tasks(
-    manifest: Dict[str, Any],
-    task_id: str,
-    flags_root: Path,
-) -> Tuple[List[str], Dict[str, Any]]:
-    """
-    Execute stage1.generate_ia_tasks by invoking generate_ia_tasks.py script.
-    
-    Returns:
-        (outputs, metrics)
-    """
-    parameters = manifest.get("parameters") or {}
-    if not isinstance(parameters, dict):
-        raise ValueError("parameters must be an object (dict)")
-    
-    # Required parameters
-    identifiers_file = parameters.get("identifiers_file")
-    if not (isinstance(identifiers_file, str) and identifiers_file.strip()):
-        raise KeyError("parameters.identifiers_file must be a string")
-    
-    family = parameters.get("family")
-    if not (isinstance(family, str) and family.strip()):
-        raise KeyError("parameters.family must be a string")
-    
-    # Optional parameters with defaults
-    output_dir = parameters.get("output_dir", "flags/staging")
-    max_tasks = parameters.get("max_tasks")
-    include_index = parameters.get("include_index", False)
-    include_supplemental = parameters.get("include_supplemental", False)
-    include_superceded = parameters.get("include_superceded", False)
-    dry_run = parameters.get("dry_run", False)
-    verbose = parameters.get("verbose", False)
-    
-    # Resolve paths
-    repo_root = Path(__file__).resolve().parents[2] if "__file__" in globals() else Path.cwd()
-    
-    # Resolve identifiers file (relative to repo root if not absolute)
-    ident_path = Path(identifiers_file)
-    if not ident_path.is_absolute():
-        ident_path = repo_root / ident_path
-    
-    if not ident_path.is_file():
-        raise FileNotFoundError(f"Identifiers file not found: {ident_path}")
-    
-    # Resolve output directory (relative to repo root if not absolute)
-    out_dir = Path(output_dir)
-    if not out_dir.is_absolute():
-        out_dir = flags_root / out_dir
-    
-    # Ensure output directory exists
-    out_dir.mkdir(parents=True, exist_ok=True)
-    
-    # Build command line for generate_ia_tasks.py
-    script_path = repo_root / "scripts" / "stage1" / "generate_ia_tasks.py"
-    if not script_path.is_file():
-        raise FileNotFoundError(f"generate_ia_tasks.py not found: {script_path}")
-    
-    cmd = [
-        sys.executable,
-        str(script_path),
-        "--identifiers", str(ident_path),
-        "--output-dir", str(out_dir),
-        "--family", family,
-    ]
-    
-    if max_tasks is not None:
-        cmd.extend(["--max-tasks", str(max_tasks)])
-    
-    if include_index:
-        cmd.append("--include-index")
-    
-    if include_supplemental:
-        cmd.append("--include-supplemental")
-    
-    if include_superceded:
-        cmd.append("--include-superceded")
-    
-    if dry_run:
-        cmd.append("--dry-run")
-    
-    if verbose:
-        cmd.append("--verbose")
-    
-    # Execute script
-    try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=300,  # 5 minute timeout
-        )
-    except subprocess.TimeoutExpired:
-        raise RuntimeError(f"generate_ia_tasks.py timed out after 5 minutes")
-    except Exception as e:
-        raise RuntimeError(f"Failed to execute generate_ia_tasks.py: {e}")
-    
-    # Check result
-    if result.returncode != 0:
-        error_msg = result.stderr or result.stdout or "Unknown error"
-        raise RuntimeError(
-            f"generate_ia_tasks.py exited with code {result.returncode}:\n{error_msg}"
-        )
-    
-    # Parse output to extract counts
-    output_text = result.stdout
-    
-    # Count generated files in output directory
-    generated_files = list(out_dir.glob("*.json"))
-    
-    # Prepare outputs
-    outputs = [str(out_dir)]
-    
-    # Prepare metrics
-    metrics = {
-        "identifiers_file": str(ident_path),
-        "output_directory": str(out_dir),
-        "family": family,
-        "max_tasks": max_tasks,
-        "include_index": include_index,
-        "include_supplemental": include_supplemental,
-        "include_superceded": include_superceded,
-        "dry_run": dry_run,
-        "generated_task_files": len(generated_files),
-        "script_output_lines": len(output_text.splitlines()),
-    }
-    
-    return outputs, metrics
 
 def execute_manifest_task(
     manifest: Dict[str, Any],
@@ -476,6 +329,7 @@ def execute_manifest_task(
 ) -> Tuple[List[str], Dict[str, Any]]:
     """
     Execute a manifest-driven JSON flag.
+    Delegates to handler scripts in scripts/stage1/.
     Returns: (outputs, metrics)
     """
     if task_type == "noop":
@@ -487,250 +341,16 @@ def execute_manifest_task(
         return [str(marker)], {"noop": True}
 
     if task_type == "stage1.inventory":
-        return task_stage1_inventory(manifest, task_id, flags_root)
+        return generate_inventory.execute_from_manifest(manifest, task_id, flags_root)
 
     if task_type == "stage1.ia_download":
-        return task_stage1_ia_download(manifest, task_id, flags_root)
+        return ia_acquire.execute_from_manifest(manifest, task_id, flags_root)
 
     if task_type == "stage1.generate_ia_tasks":
-        return task_stage1_generate_ia_tasks(manifest, task_id, flags_root)
-    
+        return generate_ia_tasks.execute_from_manifest(manifest, task_id, flags_root)
+
     raise ValueError(f"Unknown task_type: {task_type}")
 
-
-def _matches_any_glob(path_str: str, globs: List[str]) -> bool:
-    """
-    Windows-friendly glob matching against forward-slash-normalized paths.
-    """
-    from fnmatch import fnmatch
-    norm = path_str.replace("\\", "/")
-    return any(fnmatch(norm, g) for g in globs)
-
-
-def task_stage1_inventory(manifest: Dict[str, Any], task_id: str, flags_root: Path) -> Tuple[List[str], Dict[str, Any]]:
-    payload = manifest.get("payload") or {}
-    if not isinstance(payload, dict):
-        raise ValueError("payload must be an object (dict)")
-
-    roots = payload.get("roots")
-    if not (isinstance(roots, list) and all(isinstance(x, str) and x.strip() for x in roots)):
-        raise KeyError("payload.roots must be a list of UNC path strings")
-
-    include_sha256 = bool(payload.get("include_sha256", False))
-
-    include_globs = payload.get("include_globs")
-    if include_globs is not None:
-        if not (isinstance(include_globs, list) and all(isinstance(x, str) for x in include_globs)):
-            raise ValueError("payload.include_globs must be a list of strings")
-
-    exclude_globs = payload.get("exclude_globs")
-    if exclude_globs is not None:
-        if not (isinstance(exclude_globs, list) and all(isinstance(x, str) for x in exclude_globs)):
-            raise ValueError("payload.exclude_globs must be a list of strings")
-
-    # Safety brakes (defaults ON)
-    # - set max_files=0 to disable
-    # - set max_seconds=0 to disable
-    max_files = payload.get("max_files", 100000)
-    max_seconds = payload.get("max_seconds", 1800)  # 30 minutes
-
-    if max_files is None:
-        max_files = 100000
-    if max_seconds is None:
-        max_seconds = 1800
-
-    if not isinstance(max_files, int) or max_files < 0:
-        raise ValueError("payload.max_files must be an int >= 0 (0 disables the limit)")
-    if not isinstance(max_seconds, int) or max_seconds < 0:
-        raise ValueError("payload.max_seconds must be an int >= 0 (0 disables the limit)")
-
-    started = time.monotonic()
-    stopped_reason: Optional[str] = None
-
-    outdir = (flags_root / "completed" / task_id / "inventory")
-    outdir.mkdir(parents=True, exist_ok=True)
-
-    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    out_csv = outdir / f"inventory_{task_id}_{ts}.csv"
-
-    fields = ["root", "relpath", "fullpath", "size_bytes", "mtime_utc"]
-    if include_sha256:
-        fields.append("sha256")
-
-    files_seen = 0
-    bytes_seen = 0
-
-    with out_csv.open("w", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=fields)
-        w.writeheader()
-
-        for root_s in roots:
-            root = Path(root_s)
-            if not root.exists():
-                raise FileNotFoundError(f"Inventory root does not exist: {root}")
-
-            for dirpath, dirnames, filenames in os.walk(str(root)):
-                # Safety brake: time-based (checked per directory)
-                if max_seconds and (time.monotonic() - started) > max_seconds:
-                    stopped_reason = f"max_seconds_exceeded({max_seconds})"
-                    break
-
-                # Prune excluded directories so we do not traverse them at all
-                pruned: List[str] = []
-                for d in dirnames:
-                    d_full = str(Path(dirpath) / d)
-
-                    # Always prune flag archives
-                    if "\\flags\\completed\\" in d_full or "\\flags\\failed\\" in d_full:
-                        continue
-
-                    # Operator exclusions prune traversal
-                    if exclude_globs and _matches_any_glob(d_full, exclude_globs):
-                        continue
-
-                    pruned.append(d)
-                dirnames[:] = pruned
-
-                for name in filenames:
-                    # Safety brake: count-based
-                    if max_files and files_seen >= max_files:
-                        stopped_reason = f"max_files_reached({max_files})"
-                        break
-
-                    full = Path(dirpath) / name
-
-                    # Normalize once for matching
-                    full_str = str(full)
-
-                    # Hard default exclusions (always on)
-                    if "\\flags\\completed\\" in full_str or "\\flags\\failed\\" in full_str:
-                        continue
-
-                    # Operator-specified exclusions
-                    if exclude_globs and _matches_any_glob(full_str, exclude_globs):
-                        continue
-
-                    # Operator-specified inclusions
-                    if include_globs and not _matches_any_glob(full_str, include_globs):
-                        continue
-
-                    try:
-                        st = full.stat()
-                    except OSError:
-                        continue
-
-                    files_seen += 1
-                    bytes_seen += int(st.st_size)
-                    mtime_utc = datetime.fromtimestamp(st.st_mtime, tz=timezone.utc).isoformat(timespec="seconds")
-                    try:
-                        rel = str(full.relative_to(root))
-                    except Exception:
-                        rel = ""
-
-                    row = {
-                        "root": str(root),
-                        "relpath": rel,
-                        "fullpath": str(full),
-                        "size_bytes": int(st.st_size),
-                        "mtime_utc": mtime_utc,
-                    }
-
-                    if include_sha256:
-                        try:
-                            import hashlib
-                            h = hashlib.sha256()
-                            with full.open("rb") as rf:
-                                for chunk in iter(lambda: rf.read(1024 * 1024), b""):
-                                    h.update(chunk)
-                            row["sha256"] = h.hexdigest()
-                        except OSError:
-                            row["sha256"] = ""
-
-                    w.writerow(row)
-
-                if stopped_reason:
-                    break
-
-            if stopped_reason:
-                break
-
-    return [str(out_csv)], {
-        "files_seen": files_seen,
-        "bytes_seen": bytes_seen,
-        "include_sha256": include_sha256,
-        "max_files": max_files,
-        "max_seconds": max_seconds,
-        "stopped_reason": stopped_reason,
-        "elapsed_seconds": int(time.monotonic() - started),
-    }
-
-import subprocess
-
-def task_stage1_ia_download(manifest: Dict[str, Any], task_id: str, flags_root: Path) -> Tuple[List[str], Dict[str, Any]]:
-    parameters = manifest.get("parameters") or {}
-    if not isinstance(parameters, dict):
-        raise ValueError("parameters must be an object (dict)")
-
-    ia_identifier = parameters.get("ia_identifier")
-    if not (isinstance(ia_identifier, str) and ia_identifier.strip()):
-        raise KeyError("parameters.ia_identifier must be a string")
-
-    family = parameters.get("family", "Unknown")
-    ia_identifier = ia_identifier.strip()
-
-    repo_root = Path(__file__).resolve().parents[2]
-
-    # Import ia_acquire
-    try:
-        sys.path.insert(0, str(repo_root))
-        from scripts.stage1 import ia_acquire
-    except ImportError as e:
-        raise ImportError(f"Failed to import ia_acquire: {e}")
-    
-    # Get config for raw_input path
-    cfg = get_config(repo_root, None)
-    storage = cfg.get("storage", {})
-    raw_input_path = storage.get("raw_input")
-    if not raw_input_path:
-        raise KeyError("Missing storage.raw_input in config")
-    
-    base_dir = Path(raw_input_path) / "0110_Internet_Archive"
-    
-    # Prepare IaRow
-    ia_row = ia_acquire.IaRow(
-        collection="SIM",
-        family=family,
-        identifier=ia_identifier
-    )
-    
-    # Download
-    started = time.time()
-    download_result = ia_acquire.download_one(
-        row=ia_row,
-        base_dir=base_dir,
-        suffixes=ia_acquire.TIER_COMPREHENSIVE_SUFFIXES,  # NEW
-        max_retries=3,
-        retry_sleep=2.0,
-        verbose=True,
-        enable_db=True
-    )
-    elapsed = int(time.time() - started)
-    
-    status = download_result.get("status", "unknown")
-    if status not in ["ok", "partial", "skipped_already_present"]:
-        raise RuntimeError(
-            f"Download failed: {status}. "
-            f"Note: {download_result.get('note', 'No details')}"
-        )
-    
-    return [download_result.get("dest_dir")], {
-        "identifier": ia_identifier,
-        "family": family,
-        "status": status,
-        "duration_seconds": elapsed,
-        "file_count": len(download_result.get("downloaded", [])),
-        "container_id": download_result.get("container_id"),
-    }
 
 def run_once(
     watcher_id: str,
