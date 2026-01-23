@@ -340,25 +340,23 @@ def register_container_in_db(
     """
     Register the downloaded container in the MySQL database.
     
-    Returns:
-        container_id (int) if successful, None otherwise
+    Uses ACTUAL containers_t schema (with source_system, source_identifier, etc.)
+    
+    Returns: container_id (int) if successful, None otherwise
     """
     if not DB_AVAILABLE or hjb_db is None:
         return None
     
     try:
         # Check if this container already exists (idempotency)
-        existing = hjb_db.get_container_by_source("ia", row.identifier)
+        existing = hjb_db.get_container_by_source("internet_archive", row.identifier)
         if existing:
             container_id = existing["container_id"]
             print(f"  [DB] Container already registered: container_id={container_id}")
             
             # Update download status if it changed
-            if download_status == "ok" and existing.get("download_status") != "complete":
-                hjb_db.execute_query(
-                    "UPDATE containers_t SET download_status = 'complete', downloaded_at = NOW() WHERE container_id = %s",
-                    (container_id,)
-                )
+            if download_status == "ok":
+                hjb_db.update_container_download_status(container_id, "complete", str(dest_dir))
                 print(f"  [DB] Updated download_status to 'complete'")
             
             return container_id
@@ -370,7 +368,7 @@ def register_container_in_db(
             family_id = hjb_db.insert_family(
                 family_root=row.family,
                 display_name=row.family.replace("_", " ").title(),
-                family_type="journal",  # Default; can be updated later if it's a book
+                family_type="journal",
             )
             print(f"  [DB] Created new family: family_id={family_id} ({row.family})")
         else:
@@ -382,62 +380,47 @@ def register_container_in_db(
         has_djvu_xml = any("_djvu.xml" in f for f in downloaded_files)
         has_pdf = any(".pdf" in f for f in downloaded_files)
         has_scandata = any("_scandata.xml" in f for f in downloaded_files)
+        has_mets = any("_mets.xml" in f for f in downloaded_files)
+        has_alto = any("_alto.xml" in f for f in downloaded_files)
         
         # Create the container record
+        # Using ACTUAL schema parameter names
         container_id = hjb_db.insert_container(
-            source_system="ia",
+            source_system="internet_archive",
             source_identifier=row.identifier,
-            source_url=f"https://archive.org/details/{row.identifier}",
             family_id=family_id,
+            source_url=f"https://archive.org/details/{row.identifier}",
             title_id=None,  # Will be set later when we parse metadata
             container_label=row.identifier,
+            container_type="journal_issue",  # Default; can be 'book_volume', etc.
+            volume_label=None,
+            date_start=None,
+            date_end=None,
             total_pages=None,  # Will be determined during validation or OCR
             has_jp2=has_jp2,
             has_hocr=has_hocr,
             has_djvu_xml=has_djvu_xml,
+            has_alto=has_alto,
+            has_mets=has_mets,
             has_pdf=has_pdf,
+            has_scandata=has_scandata,
             raw_input_path=str(dest_dir),
         )
         
-        # Update has_scandata flag if present (not in insert_container params)
-        if has_scandata:
-            hjb_db.execute_query(
-                "UPDATE containers_t SET has_scandata = 1 WHERE container_id = %s",
-                (container_id,)
-            )
-        
-        # Set download_status based on result
-        db_download_status = "complete" if download_status == "ok" else "failed"
-        hjb_db.execute_query(
-            "UPDATE containers_t SET download_status = %s, downloaded_at = NOW() WHERE container_id = %s",
-            (db_download_status, container_id)
-        )
-        
-        # Create processing_status record
-        hjb_db.insert_processing_status(container_id)
-        
-        # Mark Stage 1 complete if download succeeded
+        # Update download_status based on result
         if download_status == "ok":
-            hjb_db.update_stage_completion(
-                container_id, 
-                "stage1_ingestion", 
-                complete=True
-            )
+            hjb_db.update_container_download_status(container_id, "complete", str(dest_dir))
         else:
-            hjb_db.update_stage_completion(
-                container_id,
-                "stage1_ingestion",
-                complete=False,
-                error_message=f"Download status: {download_status}"
-            )
+            hjb_db.update_container_download_status(container_id, "failed", str(dest_dir))
         
         print(f"  [DB] Registered container: container_id={container_id}")
         return container_id
         
     except Exception as e:
         eprint(f"  [DB ERROR] Failed to register container: {type(e).__name__}: {e}")
+        import traceback
+        traceback.print_exc(file=sys.stderr)
         return None
-
 
 # -----------------------------
 # Core download routine
