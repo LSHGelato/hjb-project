@@ -25,6 +25,7 @@
 ## Key GitHub Raw URLs
 - Claude's Project Quick Start guide: https://raw.githubusercontent.com/LSHGelato/hjb-project/refs/heads/main/.claude/QUICK_START.md
 - Claude's Project Context guide: https://raw.githubusercontent.com/LSHGelato/hjb-project/refs/heads/main/.claude/PROJECT_CONTEXT.md
+- Naming Conventions guide: https://raw.githubusercontent.com/LSHGelato/hjb-project/refs/heads/main/.claude/NAMING_CONVENTIONS.md
 - Watcher: https://raw.githubusercontent.com/LSHGelato/hjb-project/refs/heads/main/scripts/watcher/hjb_watcher.py
 - Supervisor: https://raw.githubusercontent.com/LSHGelato/hjb-project/refs/heads/main/scripts/ops/hjb_supervisor.ps1
 - Task Generator: https://raw.githubusercontent.com/LSHGelato/hjb-project/refs/heads/main/scripts/stage1/generate_ia_tasks.py
