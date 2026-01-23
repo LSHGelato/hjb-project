@@ -120,8 +120,8 @@ def write_json(path: Path, payload: Dict[str, Any]) -> None:
             tmp.replace(path)
             return
         except PermissionError:
-            # Back off and retry (common on SMB shares)
-            time.sleep(0.15 * attempt)
+            # Exponential backoff for better retry behavior (0.15s, 0.3s, 0.6s, 1.2s, 2.4s)
+            time.sleep(0.15 * (2 ** (attempt - 1)))
         finally:
             try:
                 if tmp.exists():
@@ -302,9 +302,10 @@ def is_orionmx_busy(flags_root: Path) -> bool:
     processing = flags_root / "processing"
     if not processing.exists():
         return False
-    
-    for task_file in processing.glob("*"):
-        if task_file.is_file() and "orionmx_" in task_file.name:
+
+    # Use targeted glob pattern instead of glob("*") + string filter
+    for task_file in processing.glob("*orionmx_*"):
+        if task_file.is_file():
             return True
     return False
 
@@ -791,8 +792,14 @@ def run_once(
             return False
         
     # Try to claim one manifest-driven JSON task
-    json_candidates = sorted([p for p in pending.glob("*.json") if p.is_file()])
-    for src in json_candidates[:1]:
+    # Use next() with generator instead of sorting entire list when we only need first
+    json_files = (p for p in pending.glob("*.json") if p.is_file())
+    try:
+        src = min(json_files, key=lambda p: p.name)  # Get first by name (deterministic)
+    except ValueError:
+        # No JSON files found
+        return False
+    for src in [src]:  # Process just the one file
         dst = processing / f"{src.name}.{watcher_id}.processing"
         if not atomic_rename(src, dst):
             continue

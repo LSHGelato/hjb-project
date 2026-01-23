@@ -31,6 +31,7 @@ import os
 import sys
 from contextlib import contextmanager
 from datetime import date, datetime
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -43,6 +44,7 @@ import yaml
 # Configuration Loading
 # ============================================================================
 
+@lru_cache(maxsize=1)
 def load_config() -> Dict[str, Any]:
     """Load config.yaml (or config.example.yaml fallback)."""
     script_dir = Path(__file__).resolve().parent
@@ -72,16 +74,24 @@ def get_db_config() -> Dict[str, str]:
     def pick(env_key: str, cfg_key: str, default: str = "") -> str:
         val = os.environ.get(env_key)
         if val:
-            return val.strip()
-        
+            stripped = val.strip()
+            if stripped:
+                return stripped
+
+        # Check database.X
         val = db_cfg.get(cfg_key)
-        if isinstance(val, str) and val.strip():
-            return val.strip()
-        
+        if isinstance(val, str):
+            stripped = val.strip()
+            if stripped:
+                return stripped
+
+        # Check top-level X
         val = cfg.get(cfg_key)
-        if isinstance(val, str) and val.strip():
-            return val.strip()
-        
+        if isinstance(val, str):
+            stripped = val.strip()
+            if stripped:
+                return stripped
+
         return default
     
     host = pick("HJB_DB_HOST", "host", "localhost")
@@ -396,6 +406,67 @@ def insert_work_occurrence(
         query,
         (work_id, issue_id, container_id, start_page, end_page, occurrence_text, source)
     )
+
+
+# ============================================================================
+# Processing Status
+# ============================================================================
+
+def insert_processing_status(container_id: int) -> int:
+    """
+    Initialize processing status for a container.
+    
+    Returns: status_id
+    """
+    query = "INSERT INTO processing_status_t (container_id) VALUES (%s)"
+    return execute_query(query, (container_id,))
+
+
+# Valid stage names for update_stage_completion (prevents SQL injection)
+_VALID_STAGES = frozenset({
+    "stage1_ingestion",
+    "stage2_ocr",
+    "stage3_segmentation",
+    "stage4_enrichment",
+    "stage5_export",
+})
+
+
+def update_stage_completion(
+    container_id: int,
+    stage: str,
+    complete: bool = True,
+    error_message: Optional[str] = None
+) -> None:
+    """
+    Update stage completion status.
+
+    Args:
+        container_id: Container ID
+        stage: e.g., "stage1_ingestion", "stage2_ocr", etc.
+        complete: True if stage completed successfully
+        error_message: Error message if failed
+    """
+    # Validate stage name to prevent SQL injection
+    if stage not in _VALID_STAGES:
+        raise ValueError(f"Invalid stage name: {stage}. Must be one of: {', '.join(sorted(_VALID_STAGES))}")
+
+    if complete:
+        # Stage name is validated above, safe to use in query
+        query = f"""
+            UPDATE processing_status_t
+            SET {stage}_complete = 1, {stage}_completed_at = NOW()
+            WHERE container_id = %s
+        """
+        execute_query(query, (container_id,))
+    else:
+        query = """
+            UPDATE processing_status_t 
+            SET last_error_stage = %s, last_error_message = %s, 
+                last_error_at = NOW(), retry_count = retry_count + 1
+            WHERE container_id = %s
+        """
+        execute_query(query, (stage, error_message, container_id))
 
 
 # ============================================================================

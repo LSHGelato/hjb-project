@@ -18,13 +18,28 @@ These are flagged but NOT split (containers_t keeps it whole; pages_t will mark 
 """
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Optional, Literal
+from typing import Optional, Literal, List
 import logging
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
+
+
+# Module-level constants for efficiency (avoid recreating on each call)
+_ROMAN_VALUES = {'I': 1, 'V': 5, 'X': 10, 'L': 50, 'C': 100, 'D': 500, 'M': 1000}
+
+# Pre-compiled regex patterns for identifier parsing
+_PATTERN_STANDARD_ISSUE = re.compile(
+    r'^(?P<pub>.+?)_(?P<date>\d{4}-\d{2}-\d{2})_(?P<vol>\d+)_(?P<issue>\d+)$'
+)
+_PATTERN_ANNUAL_INDEX = re.compile(
+    r'^(?P<pub>.+?)_(?P<year>\d{4})_(?P<vol>\d+)_index$'
+)
+_PATTERN_HALFYEAR_INDEX = re.compile(
+    r'^(?P<pub>.+?)_(?P<monthrange>[a-z]+-[a-z]+-\d{4})_(?P<vol>\d+)_index$'
+)
 
 
 @dataclass
@@ -49,12 +64,8 @@ class ParsedIAIdentifier:
     # Half-year variant (for split indexes)
     half_year_range: Optional[str]  # "january-june", "july-december", etc.
     
-    # Warnings/flags
-    warnings: list[str] = None
-    
-    def __post_init__(self):
-        if self.warnings is None:
-            self.warnings = []
+    # Warnings/flags - use field(default_factory=list) to avoid mutable default
+    warnings: List[str] = field(default_factory=list)
     
     @property
     def volume_label(self) -> str:
@@ -87,17 +98,13 @@ class ParsedIAIdentifier:
 
 
 def roman_to_int(roman: str) -> int:
-    """Convert Roman numeral to integer"""
-    val = {
-        'I': 1, 'V': 5, 'X': 10, 'L': 50,
-        'C': 100, 'D': 500, 'M': 1000
-    }
+    """Convert Roman numeral to integer using module-level lookup table."""
     total = 0
     prev = 0
     for char in reversed(roman.upper()):
-        if char not in val:
+        if char not in _ROMAN_VALUES:
             raise ValueError(f"Invalid Roman numeral: {roman}")
-        c = val[char]
+        c = _ROMAN_VALUES[char]
         if c < prev:
             total -= c
         else:
@@ -130,31 +137,28 @@ def parse_american_architect_identifier(ia_identifier: str) -> Optional[ParsedIA
     
     # Remove 'sim_' prefix
     rest = identifier[4:]
-    
-    # Split by underscore - but publication name has underscores too
-    # Heuristic: publication ends when we hit a date pattern
-    
-    # Try to match the entire pattern
-    pattern_variants = [
-        # Standard issue: sim_[pub]_YYYY-MM-DD_[vol]_[issue]
-        r'^(?P<pub>.+?)_(?P<date>\d{4}-\d{2}-\d{2})_(?P<vol>\d+)_(?P<issue>\d+)$',
-        
-        # Index (annual): sim_[pub]_YYYY_[vol]_index
-        r'^(?P<pub>.+?)_(?P<year>\d{4})_(?P<vol>\d+)_index$',
-        
-        # Index (half-year): sim_[pub]_[monthrange]-YYYY_[vol]_index
-        r'^(?P<pub>.+?)_(?P<monthrange>[a-z]+-[a-z]+-\d{4})_(?P<vol>\d+)_index$',
-    ]
-    
+
+    # Try pre-compiled patterns in order
     matched = None
     match_type = None
-    
-    for i, pattern in enumerate(pattern_variants):
-        m = re.match(pattern, identifier[4:])  # Skip 'sim_'
+
+    # Try standard issue pattern first (most common)
+    m = _PATTERN_STANDARD_ISSUE.match(rest)
+    if m:
+        matched = m
+        match_type = 0
+    else:
+        # Try annual index
+        m = _PATTERN_ANNUAL_INDEX.match(rest)
         if m:
             matched = m
-            match_type = i
-            break
+            match_type = 1
+        else:
+            # Try half-year index
+            m = _PATTERN_HALFYEAR_INDEX.match(rest)
+            if m:
+                matched = m
+                match_type = 2
     
     if not matched:
         log.warning(f"Could not parse identifier: {identifier}")

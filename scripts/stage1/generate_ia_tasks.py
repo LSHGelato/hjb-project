@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 import io
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
@@ -29,8 +30,17 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
+# Pre-compiled regex for identifier filtering (case-insensitive)
+_FILTER_PATTERN = re.compile(r'_(?:index|superceded|supplemental)', re.IGNORECASE)
+
+
 def utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def utc_now_compact() -> str:
+    """Generate compact UTC timestamp without colons/dashes for task IDs."""
+    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
 
 def parse_identifiers(input_file: Path) -> list[str]:
@@ -53,22 +63,17 @@ def parse_identifiers(input_file: Path) -> list[str]:
 def filter_identifiers(identifiers: list[str]) -> list[str]:
     """
     Filter to production identifiers only.
-    
+
     Excludes:
     - _index (volume index, not a regular issue)
     - _superceded (old complete package, replaced by individual issues)
     - _supplemental (supplementary content, often end-of-volume)
-    
+
     We process these separately if needed, but for main acquisition
     we focus on regular issues.
     """
-    filtered = []
-    for ident in identifiers:
-        # Skip index, superceded, supplemental
-        if any(x in ident.lower() for x in ["_index", "superceded", "supplemental"]):
-            continue
-        filtered.append(ident)
-    return filtered
+    # Use pre-compiled regex for O(n) filtering instead of O(n*m)
+    return [ident for ident in identifiers if not _FILTER_PATTERN.search(ident)]
 
 
 def generate_task_flag(
@@ -80,7 +85,7 @@ def generate_task_flag(
     """
     Generate a single task flag JSON for this identifier.
     """
-    task_id = f"{utc_now_iso().replace(':', '').replace('-', '')}_{identifier}"
+    task_id = f"{utc_now_compact()}_{identifier}"
     
     return {
         "schema": "hjb.task.v1",

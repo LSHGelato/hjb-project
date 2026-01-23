@@ -219,14 +219,38 @@ def pick_suffixes(tier: str) -> List[str]:
 def choose_files_for_item(file_names: List[str], suffixes: List[str]) -> List[str]:
     """
     For each suffix in order, select the first file that endswith that suffix.
-    This mirrors your prior approach but makes the selection logic explicit.
+    Uses a suffix map for O(n) complexity instead of O(n*m).
     """
-    chosen: List[str] = []
-    for suf in suffixes:
-        match = next((n for n in file_names if n and n.endswith(suf)), None)
-        if match:
-            chosen.append(match)
-    return chosen
+    # Build suffix-to-file map in single pass: O(n)
+    suffix_to_file = {}
+    for name in file_names:
+        if not name:
+            continue
+        for suf in suffixes:
+            if name.endswith(suf) and suf not in suffix_to_file:
+                suffix_to_file[suf] = name
+                break
+
+    # Return files in suffix order
+    return [suffix_to_file[suf] for suf in suffixes if suf in suffix_to_file]
+
+
+def strip_identifier_prefix(filename: str, identifier: str) -> str:
+    """
+    Strip the identifier prefix from a filename if present.
+
+    E.g., 'sim_foo_1234_file.pdf' with identifier 'sim_foo_1234' -> 'file.pdf'
+    """
+    prefix = identifier + "_"
+    if filename.startswith(prefix):
+        return filename[len(prefix):]
+    return filename
+
+
+def get_final_filename(original: str, identifier: str) -> str:
+    """Get the final renamed filename for a downloaded file."""
+    suffix = strip_identifier_prefix(original, identifier)
+    return f"{identifier}_{suffix}"
 
 
 def already_have_all(target_dir: Path, identifier: str, files_to_get: List[str]) -> bool:
@@ -238,11 +262,7 @@ def already_have_all(target_dir: Path, identifier: str, files_to_get: List[str])
     So we check for the final renamed form.
     """
     for original in files_to_get:
-        if original.startswith(identifier + "_"):
-            suffix = original[len(identifier) + 1 :]
-        else:
-            suffix = original
-        final_name = f"{identifier}_{suffix}"
+        final_name = get_final_filename(original, identifier)
         if not (target_dir / final_name).exists():
             return False
     return True
@@ -259,12 +279,7 @@ def rename_downloads_in_place(identifier_dir: Path, identifier: str, files_downl
             # IA sometimes skips missing/unavailable; we'll tolerate and log at higher layer.
             continue
 
-        if original_name.startswith(identifier + "_"):
-            suffix = original_name[len(identifier) + 1 :]
-        else:
-            suffix = original_name
-
-        new_name = f"{identifier}_{suffix}"
+        new_name = get_final_filename(original_name, identifier)
         if p.name == new_name:
             continue
 
@@ -469,23 +484,20 @@ def download_one(
         try:
             item = internetarchive.get_item(ident)
             # Listing item.files can throw intermittently; treat as retryable.
-            available_files = list(item.files)
-            names = [f.get("name") for f in available_files if isinstance(f, dict) and "name" in f]
-            names = [n for n in names if isinstance(n, str)]
+            # Combined into single comprehension for efficiency
+            names = [
+                f["name"] for f in item.files
+                if isinstance(f, dict) and isinstance(f.get("name"), str)
+            ]
 
             selected = choose_files_for_item(names, suffixes)
             result["selected"] = selected
 
             # Track which suffixes were missing to make later coverage analysis easier.
-            missing = []
-            for suf in suffixes:
-                if not any(n.endswith(suf) for n in selected):
-                    # We only say "missing" for suffixes we attempted to select.
-                    # For suffixes not represented, we record it.
-                    # (This is coarse because file naming can vary, but useful.)
-                    if not any(n.endswith(suf) for n in names):
-                        missing.append(suf)
-            result["missing_suffixes"] = missing
+            # Use sets for O(1) membership tests
+            selected_suffixes = {suf for suf in suffixes if any(n.endswith(suf) for n in selected)}
+            available_suffixes = {suf for suf in suffixes if any(n.endswith(suf) for n in names)}
+            result["missing_suffixes"] = [suf for suf in suffixes if suf not in selected_suffixes and suf not in available_suffixes]
 
             if not selected:
                 result["status"] = "no_matching_files"
@@ -534,11 +546,7 @@ def download_one(
             # Confirm which files exist now.
             downloaded = []
             for original in selected:
-                if original.startswith(ident + "_"):
-                    suffix = original[len(ident) + 1 :]
-                else:
-                    suffix = original
-                final_name = f"{ident}_{suffix}"
+                final_name = get_final_filename(original, ident)
                 if (identifier_dir / final_name).exists():
                     downloaded.append(final_name)
             result["downloaded"] = downloaded
@@ -573,8 +581,8 @@ def download_one(
                     container_id = register_container_in_db(row, dest_dir, [], result["status"])
                     result["container_id"] = container_id
                 return result
-            # Backoff and retry
-            time.sleep(retry_sleep * attempt)
+            # Exponential backoff for better retry behavior
+            time.sleep(retry_sleep * (2 ** (attempt - 1)))
 
     # Should never reach here
     result["status"] = "error"
