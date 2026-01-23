@@ -12,7 +12,7 @@ Purpose:
 See /mnt/user-data/uploads/ for proof
 
 Configuration:
-Reads from environment variables or config.yaml:
+Reads from environment variables (auto-loaded from .env) or config.yaml:
   - HJB_DB_HOST
   - HJB_DB_USER
   - HJB_DB_PASSWORD (required)
@@ -22,7 +22,7 @@ Usage:
   from hjb_db import insert_container, get_container_by_source
 
 Dependencies:
-  pip install mysql-connector-python PyYAML
+  pip install mysql-connector-python PyYAML python-dotenv
 """
 
 from __future__ import annotations
@@ -38,6 +38,11 @@ from typing import Any, Dict, List, Optional, Tuple
 import mysql.connector
 from mysql.connector import Error as MySQLError
 import yaml
+from dotenv import load_dotenv
+
+# Load .env from repo root
+_repo_root = Path(__file__).resolve().parents[2]
+load_dotenv(_repo_root / ".env")
 
 
 # ============================================================================
