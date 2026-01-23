@@ -8,6 +8,10 @@ internetarchive>=5.7.0
 # Config and data handling
 pyyaml>=6.0
 python-dateutil>=2.9.0
+python-dotenv>=1.0.0
+
+# Database
+mysql-connector-python>=8.0
 
 # HTTP and networking
 requests>=2.32.0
