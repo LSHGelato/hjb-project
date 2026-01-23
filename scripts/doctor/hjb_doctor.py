@@ -22,8 +22,10 @@ Exit codes:
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import socket
+import stat
 import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -134,10 +136,13 @@ def parse_paths(cfg: Dict[str, Any]) -> Paths:
 
 
 def require_dir(p: Path, label: str) -> None:
-    if not p.exists():
+    """Check that path exists and is a directory using single stat call."""
+    try:
+        st = p.stat()
+        if not stat.S_ISDIR(st.st_mode):
+            raise NotADirectoryError(f"{label} is not a directory: {p}")
+    except FileNotFoundError:
         raise FileNotFoundError(f"{label} does not exist: {p}")
-    if not p.is_dir():
-        raise NotADirectoryError(f"{label} is not a directory: {p}")
 
 
 def check_scratch(scratch_root: Path) -> None:
@@ -214,7 +219,6 @@ def main() -> int:
     except Exception as ex:
         summary["error"] = f"{type(ex).__name__}: {ex}"
         if args.json:
-            import json
             print(json.dumps(summary, indent=2, sort_keys=True))
         else:
             eprint(f"[FAIL] Config: {summary['error']}")
@@ -227,7 +231,6 @@ def main() -> int:
     except Exception as ex:
         summary["error"] = f"{type(ex).__name__}: {ex}"
         if args.json:
-            import json
             print(json.dumps(summary, indent=2, sort_keys=True))
         else:
             eprint(f"[FAIL] Scratch: {summary['error']}")
@@ -245,7 +248,6 @@ def main() -> int:
     except Exception as ex:
         summary["error"] = f"{type(ex).__name__}: {ex}"
         if args.json:
-            import json
             print(json.dumps(summary, indent=2, sort_keys=True))
         else:
             eprint(f"[FAIL] NAS paths: {summary['error']}")

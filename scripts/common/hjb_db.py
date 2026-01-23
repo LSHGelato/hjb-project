@@ -28,6 +28,7 @@ import os
 import sys
 from contextlib import contextmanager
 from datetime import date, datetime
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -40,6 +41,7 @@ import yaml
 # Configuration Loading
 # ============================================================================
 
+@lru_cache(maxsize=1)
 def load_config() -> Dict[str, Any]:
     """
     Load config.yaml (or config.example.yaml fallback).
@@ -80,18 +82,24 @@ def get_db_config() -> Dict[str, str]:
     def pick(env_key: str, cfg_key: str, default: str = "") -> str:
         val = os.environ.get(env_key)
         if val:
-            return val.strip()
-        
+            stripped = val.strip()
+            if stripped:
+                return stripped
+
         # Check database.X
         val = db_cfg.get(cfg_key)
-        if isinstance(val, str) and val.strip():
-            return val.strip()
-        
+        if isinstance(val, str):
+            stripped = val.strip()
+            if stripped:
+                return stripped
+
         # Check top-level X
         val = cfg.get(cfg_key)
-        if isinstance(val, str) and val.strip():
-            return val.strip()
-        
+        if isinstance(val, str):
+            stripped = val.strip()
+            if stripped:
+                return stripped
+
         return default
     
     host = pick("HJB_DB_HOST", "host", "localhost")
@@ -475,6 +483,16 @@ def insert_processing_status(container_id: int) -> int:
     return execute_query(query, (container_id,))
 
 
+# Valid stage names for update_stage_completion (prevents SQL injection)
+_VALID_STAGES = frozenset({
+    "stage1_ingestion",
+    "stage2_ocr",
+    "stage3_segmentation",
+    "stage4_enrichment",
+    "stage5_export",
+})
+
+
 def update_stage_completion(
     container_id: int,
     stage: str,
@@ -483,16 +501,21 @@ def update_stage_completion(
 ) -> None:
     """
     Update stage completion status.
-    
+
     Args:
         container_id: Container ID
         stage: e.g., "stage1_ingestion", "stage2_ocr", etc.
         complete: True if stage completed successfully
         error_message: Error message if failed
     """
+    # Validate stage name to prevent SQL injection
+    if stage not in _VALID_STAGES:
+        raise ValueError(f"Invalid stage name: {stage}. Must be one of: {', '.join(sorted(_VALID_STAGES))}")
+
     if complete:
+        # Stage name is validated above, safe to use in query
         query = f"""
-            UPDATE processing_status_t 
+            UPDATE processing_status_t
             SET {stage}_complete = 1, {stage}_completed_at = NOW()
             WHERE container_id = %s
         """
