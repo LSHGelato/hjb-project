@@ -110,6 +110,18 @@ except ImportError:
     DB_AVAILABLE = False
     hjb_db = None
 
+# Parser for extracting metadata from IA identifiers
+try:
+    from scripts.stage1.parse_american_architect_ia import (
+        parse_american_architect_identifier,
+        ParsedIAIdentifier,
+    )
+    PARSER_AVAILABLE = True
+except ImportError:
+    PARSER_AVAILABLE = False
+    parse_american_architect_identifier = None
+    ParsedIAIdentifier = None
+
 
 # -----------------------------
 # Tier definitions (customize)
@@ -433,11 +445,34 @@ def reconstruct_metadata_from_local(
     if len(container_label) > 255:
         container_label = container_label[:252] + "..."
 
+    # Parse the identifier to extract structured metadata
+    parsed = None
+    volume_label = None
+    date_start = None
+    date_end = None
+
+    if PARSER_AVAILABLE and parse_american_architect_identifier:
+        try:
+            parsed = parse_american_architect_identifier(identifier)
+            if parsed:
+                volume_label = parsed.volume_label
+                # For regular issues, use issue_date for both start and end
+                # For indexes, date_end stays None (indexes span a range)
+                if parsed.issue_date:
+                    date_start = parsed.issue_date.date() if hasattr(parsed.issue_date, 'date') else parsed.issue_date
+                    if not parsed.is_index:
+                        date_end = date_start
+        except Exception as e:
+            print(f"  [WARN] Parser failed for {identifier}: {e}")
+
     return {
         "identifier": identifier,
         "metadata": metadata,
         "container_label": container_label,
         "total_pages": total_pages,
+        "volume_label": volume_label,
+        "date_start": date_start,
+        "date_end": date_end,
         "has_jp2": has_jp2,
         "has_hocr": has_hocr,
         "has_djvu_xml": has_djvu_xml,
@@ -448,6 +483,7 @@ def reconstruct_metadata_from_local(
         "has_meta_json": has_meta_json,
         "files_in_dir": files_in_dir,
         "download_dir": str(download_dir),
+        "_parsed_identifier": parsed,
     }
 
 
@@ -496,7 +532,108 @@ def register_container_from_local(
         dest_dir=download_dir,
         downloaded_files=local_meta["files_in_dir"],
         download_status="ok",
+        local_meta=local_meta,
     )
+
+
+# -----------------------------
+# Issue creation from parsed identifier
+# -----------------------------
+def create_issue_from_parsed(
+    parsed: "ParsedIAIdentifier",
+    family_id: int,
+    title_id: Optional[int] = None,
+) -> Optional[int]:
+    """
+    Create an issue record in issues_t from parsed identifier data.
+
+    Args:
+        parsed: ParsedIAIdentifier from the parser
+        family_id: Foreign key to publication_families_t
+        title_id: Optional foreign key to publication_titles_t
+
+    Returns:
+        issue_id if created/found, None on error
+    """
+    if not DB_AVAILABLE or hjb_db is None:
+        return None
+
+    if parsed is None:
+        return None
+
+    try:
+        conn = hjb_db.get_connection()
+        if not conn:
+            return None
+
+        cursor = conn.cursor(dictionary=True)
+
+        # Build canonical_issue_key
+        canonical_key = parsed.canonical_issue_key
+
+        # Check if issue already exists
+        cursor.execute("""
+            SELECT issue_id FROM issues_t
+            WHERE canonical_issue_key = %s
+        """, (canonical_key,))
+
+        existing = cursor.fetchone()
+        if existing:
+            print(f"  [DB] Issue already exists: {canonical_key} (issue_id: {existing['issue_id']})")
+            cursor.close()
+            conn.close()
+            return existing['issue_id']
+
+        # Prepare issue data
+        issue_date_start = None
+        issue_date_end = None
+        if parsed.issue_date:
+            issue_date_start = parsed.issue_date.date() if hasattr(parsed.issue_date, 'date') else parsed.issue_date
+            # For regular issues, start and end are the same
+            # For indexes, date_end stays None
+            if not parsed.is_index:
+                issue_date_end = issue_date_start
+
+        # Create new issue
+        sql = """
+            INSERT INTO issues_t
+            (title_id, family_id, volume_label, volume_sort, issue_label, issue_sort,
+             issue_date_start, issue_date_end, year_published,
+             is_book_edition, is_special_issue, is_supplement, canonical_issue_key)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """
+
+        values = (
+            title_id,
+            family_id,
+            parsed.volume_label,
+            parsed.volume_num,
+            str(parsed.issue_num) if parsed.issue_num else ("Index" if parsed.is_index else None),
+            parsed.issue_num,
+            issue_date_start,
+            issue_date_end,
+            parsed.year,
+            0,  # is_book_edition
+            0,  # is_special_issue
+            0,  # is_supplement
+            canonical_key,
+        )
+
+        cursor.execute(sql, values)
+        conn.commit()
+
+        issue_id = cursor.lastrowid
+        print(f"  [DB] Created issue: {canonical_key} (issue_id: {issue_id})")
+
+        cursor.close()
+        conn.close()
+        return issue_id
+
+    except Exception as e:
+        eprint(f"  [DB ERROR] Failed to create issue: {type(e).__name__}: {e}")
+        import traceback
+        traceback.print_exc(file=sys.stderr)
+        return None
 
 
 # -----------------------------
@@ -507,31 +644,34 @@ def register_container_in_db(
     dest_dir: Path,
     downloaded_files: List[str],
     download_status: str,
+    local_meta: Optional[Dict[str, Any]] = None,
 ) -> Optional[int]:
     """
     Register the downloaded container in the MySQL database.
-    
+
     Uses ACTUAL containers_t schema (with source_system, source_identifier, etc.)
-    
+    If local_meta is provided (from reconstruct_metadata_from_local), uses parsed
+    identifier data for enhanced metadata (volume, dates, page count).
+
     Returns: container_id (int) if successful, None otherwise
     """
     if not DB_AVAILABLE or hjb_db is None:
         return None
-    
+
     try:
         # Check if this container already exists (idempotency)
         existing = hjb_db.get_container_by_source("internet_archive", row.identifier)
         if existing:
             container_id = existing["container_id"]
             print(f"  [DB] Container already registered: container_id={container_id}")
-            
+
             # Update download status if it changed
             if download_status == "ok":
                 hjb_db.update_container_download_status(container_id, "complete", str(dest_dir))
                 print(f"  [DB] Updated download_status to 'complete'")
-            
+
             return container_id
-        
+
         # Get or create the publication family
         family = hjb_db.get_family_by_root(row.family)
         if not family:
@@ -544,7 +684,7 @@ def register_container_in_db(
             print(f"  [DB] Created new family: family_id={family_id} ({row.family})")
         else:
             family_id = family["family_id"]
-        
+
         # Determine which files we have (for has_* flags)
         has_jp2 = any("_jp2.zip" in f for f in downloaded_files)
         has_hocr = any("_hocr.html" in f for f in downloaded_files)
@@ -553,7 +693,23 @@ def register_container_in_db(
         has_scandata = any("_scandata.xml" in f for f in downloaded_files)
         has_mets = any("_mets.xml" in f for f in downloaded_files)
         has_alto = any("_alto.xml" in f for f in downloaded_files)
-        
+
+        # Extract enhanced metadata from local_meta if available
+        volume_label = None
+        date_start = None
+        date_end = None
+        total_pages = None
+        container_label = row.identifier
+        parsed = None
+
+        if local_meta:
+            volume_label = local_meta.get("volume_label")
+            date_start = local_meta.get("date_start")
+            date_end = local_meta.get("date_end")
+            total_pages = local_meta.get("total_pages")
+            container_label = local_meta.get("container_label", row.identifier)
+            parsed = local_meta.get("_parsed_identifier")
+
         # Create the container record
         # Using ACTUAL schema parameter names
         container_id = hjb_db.insert_container(
@@ -562,12 +718,12 @@ def register_container_in_db(
             family_id=family_id,
             source_url=f"https://archive.org/details/{row.identifier}",
             title_id=None,  # Will be set later when we parse metadata
-            container_label=row.identifier,
+            container_label=container_label,
             container_type="journal_issue",  # Default; can be 'book_volume', etc.
-            volume_label=None,
-            date_start=None,
-            date_end=None,
-            total_pages=None,  # Will be determined during validation or OCR
+            volume_label=volume_label,
+            date_start=date_start,
+            date_end=date_end,
+            total_pages=total_pages,
             has_jp2=has_jp2,
             has_hocr=has_hocr,
             has_djvu_xml=has_djvu_xml,
@@ -577,16 +733,45 @@ def register_container_in_db(
             has_scandata=has_scandata,
             raw_input_path=str(dest_dir),
         )
-        
+
         # Update download_status based on result
         if download_status == "ok":
             hjb_db.update_container_download_status(container_id, "complete", str(dest_dir))
         else:
             hjb_db.update_container_download_status(container_id, "failed", str(dest_dir))
-        
+
         print(f"  [DB] Registered container: container_id={container_id}")
+
+        # Create issue from parsed identifier if available
+        if parsed is not None:
+            try:
+                issue_id = create_issue_from_parsed(
+                    parsed=parsed,
+                    family_id=family_id,
+                    title_id=None,
+                )
+
+                # Create issue_containers_t mapping
+                if issue_id and container_id:
+                    conn = hjb_db.get_connection()
+                    if conn:
+                        cursor = conn.cursor()
+                        cursor.execute("""
+                            INSERT INTO issue_containers_t
+                            (issue_id, container_id, is_preferred, is_complete)
+                            VALUES (%s, %s, 1, 1)
+                            ON DUPLICATE KEY UPDATE is_preferred = 1
+                        """, (issue_id, container_id))
+                        conn.commit()
+                        cursor.close()
+                        conn.close()
+                        print(f"  [DB] Mapped issue {issue_id} to container {container_id}")
+            except Exception as e:
+                # Don't fail container registration if issue creation fails
+                eprint(f"  [DB WARN] Issue creation failed (container still registered): {e}")
+
         return container_id
-        
+
     except Exception as e:
         eprint(f"  [DB ERROR] Failed to register container: {type(e).__name__}: {e}")
         import traceback
