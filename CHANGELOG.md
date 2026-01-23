@@ -12,6 +12,20 @@ and adheres to **Semantic Versioning** (https://semver.org/).
 
 ### Added
 
+#### Retroactive Registration System (HJB-STAGE1)
+- `reconstruct_metadata_from_local()` function to rebuild metadata from local IA download files
+  - Reads `_meta.json` for IA metadata
+  - Parses `_scandata.xml` for page count
+  - Scans directory for available file types (JP2, PDF, HOCR, etc.)
+- `register_container_from_local()` function for registering previously downloaded items
+- `scripts/register_existing_downloads.py` - bulk registration script for existing IA downloads
+  - Family-based directory scanning
+  - Duplicate detection (skips already-registered items)
+  - Dry-run mode for previewing changes
+  - Comprehensive logging and error handling
+  - Progress reporting with summary statistics
+- `docs/RETROACTIVE_REGISTRATION.md` - usage guide for retroactive registration
+
 - New supervisor trigger `ops_update_deps_watcher.flag` for pulling code + installing dependencies + restarting watcher
 - `internetarchive` package (v1.10.0) to requirements for IA downloads in stage1.ia_download
 - `Install-Requirements()` function in supervisor for robustly installing from requirements.txt
