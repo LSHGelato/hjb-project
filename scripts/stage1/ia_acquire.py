@@ -75,7 +75,8 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple, Union
+import xml.etree.ElementTree as ET
 
 # Error Checking
 print(f"[ia_acquire] Attempting to import hjb_db...", file=sys.stderr)
@@ -342,6 +343,161 @@ def fetch_ia_metadata_json(identifier: str, dest_dir: Path, verbose: bool = Fals
     except (json.JSONDecodeError, IOError) as e:
         print(f"Failed to save metadata JSON: {e}")
         return None
+
+# -----------------------------
+# Metadata reconstruction from local files
+# -----------------------------
+def reconstruct_metadata_from_local(
+    identifier: str,
+    download_dir: Path,
+) -> Dict[str, Any]:
+    """
+    Reconstruct metadata dictionary from locally downloaded IA item.
+
+    Reads:
+    - {identifier}_meta.json: Primary metadata (from IA API)
+    - {identifier}_scandata.xml: Page count (optional)
+    - Directory scan: Check for _jp2.zip, _djvu.xml, _hocr.html, .pdf, _scandata.xml
+
+    Args:
+        identifier: The Internet Archive identifier
+        download_dir: Path to the directory containing downloaded files
+
+    Returns:
+        dict with metadata and file availability flags
+
+    Raises:
+        FileNotFoundError: If directory doesn't exist
+        ValueError: If metadata cannot be reconstructed
+    """
+    if not download_dir.exists():
+        raise FileNotFoundError(f"Download directory not found: {download_dir}")
+
+    # Scan directory for available files
+    files_in_dir = [f.name for f in download_dir.iterdir() if f.is_file()]
+
+    # Detect available file types
+    has_jp2 = any("_jp2.zip" in f for f in files_in_dir)
+    has_hocr = any("_hocr.html" in f for f in files_in_dir)
+    has_djvu_xml = any("_djvu.xml" in f for f in files_in_dir)
+    has_pdf = any(".pdf" in f.lower() for f in files_in_dir)
+    has_scandata = any("_scandata.xml" in f for f in files_in_dir)
+    has_mets = any("_mets.xml" in f for f in files_in_dir)
+    has_alto = any("_alto.xml" in f for f in files_in_dir)
+    has_meta_json = any("_meta.json" in f for f in files_in_dir)
+
+    # Try to load metadata from _meta.json (saved by fetch_ia_metadata_json)
+    metadata = {}
+    meta_json_path = download_dir / f"{identifier}_meta.json"
+    if meta_json_path.exists():
+        try:
+            with meta_json_path.open("r", encoding="utf-8") as f:
+                meta_data = json.load(f)
+                # IA API returns {"metadata": {...}, "files": [...], ...}
+                if "metadata" in meta_data:
+                    metadata = meta_data.get("metadata", {})
+                else:
+                    metadata = meta_data
+        except (json.JSONDecodeError, IOError) as e:
+            print(f"  [WARN] Failed to parse _meta.json: {e}")
+
+    # Try to get page count from scandata.xml
+    total_pages = None
+    scandata_path = download_dir / f"{identifier}_scandata.xml"
+    if scandata_path.exists():
+        try:
+            tree = ET.parse(str(scandata_path))
+            root = tree.getroot()
+            # Count <page> elements
+            pages = root.findall(".//page")
+            if pages:
+                total_pages = len(pages)
+        except ET.ParseError as e:
+            print(f"  [WARN] Failed to parse scandata.xml: {e}")
+
+    # Build container label from metadata
+    title = metadata.get("title", identifier)
+    volume = metadata.get("volume", "")
+    date = metadata.get("date", "")
+
+    if volume and date:
+        container_label = f"{title} Vol.{volume} ({date})"
+    elif volume:
+        container_label = f"{title} Vol.{volume}"
+    elif date:
+        container_label = f"{title} ({date})"
+    else:
+        container_label = title if title != identifier else identifier
+
+    # Truncate if too long
+    if len(container_label) > 255:
+        container_label = container_label[:252] + "..."
+
+    return {
+        "identifier": identifier,
+        "metadata": metadata,
+        "container_label": container_label,
+        "total_pages": total_pages,
+        "has_jp2": has_jp2,
+        "has_hocr": has_hocr,
+        "has_djvu_xml": has_djvu_xml,
+        "has_pdf": has_pdf,
+        "has_scandata": has_scandata,
+        "has_mets": has_mets,
+        "has_alto": has_alto,
+        "has_meta_json": has_meta_json,
+        "files_in_dir": files_in_dir,
+        "download_dir": str(download_dir),
+    }
+
+
+def register_container_from_local(
+    identifier: str,
+    download_dir: Path,
+    family: str,
+    collection: str = "SIM",
+) -> Optional[int]:
+    """
+    Register a previously downloaded container in the database.
+
+    This is used for retroactive registration of items that were downloaded
+    before database integration was added.
+
+    Args:
+        identifier: The Internet Archive identifier
+        download_dir: Path to the directory containing downloaded files
+        family: Publication family name (e.g., "American_Architect_family")
+        collection: Collection name (default "SIM")
+
+    Returns:
+        container_id if successful, None otherwise
+    """
+    if not DB_AVAILABLE or hjb_db is None:
+        print(f"  [WARN] Database not available, skipping registration")
+        return None
+
+    # Reconstruct metadata from local files
+    try:
+        local_meta = reconstruct_metadata_from_local(identifier, download_dir)
+    except (FileNotFoundError, ValueError) as e:
+        print(f"  [ERROR] Failed to reconstruct metadata: {e}")
+        return None
+
+    # Create IaRow for compatibility with existing registration
+    row = IaRow(
+        collection=collection,
+        family=family,
+        identifier=identifier,
+    )
+
+    # Use existing registration function with reconstructed file list
+    return register_container_in_db(
+        row=row,
+        dest_dir=download_dir,
+        downloaded_files=local_meta["files_in_dir"],
+        download_status="ok",
+    )
+
 
 # -----------------------------
 # Database registration
