@@ -443,17 +443,17 @@ def main():
             successful += 1
             total_pages += result["pages_inserted"]
             print(
-                f"✓ Container {result['container_id']}: "
+                f"[OK] Container {result['container_id']}: "
                 f"{result['pages_inserted']} pages (source: {result['ocr_source']})"
             )
         elif result["status"] == "error":
             failed += 1
             print(
-                f"✗ Container {result['container_id']}: "
-                f"ERROR - {result['error_message']}"
+                f"[ERROR] Container {result['container_id']}: "
+                f"{result['error_message']}"
             )
         else:
-            print(f"- Container {result['container_id']}: SKIPPED")
+            print(f"[SKIPPED] Container {result['container_id']}")
 
     print(f"\nTotal: {successful} successful, {failed} failed, {total_pages} pages inserted")
 
