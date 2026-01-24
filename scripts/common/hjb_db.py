@@ -359,7 +359,7 @@ def insert_page(
 ) -> int:
     """Insert a page record. Returns: page_id"""
     query = """
-        INSERT INTO pages_t 
+        INSERT INTO pages_t
         (container_id, page_num, page_type, ocr_text, ocr_confidence)
         VALUES (%s, %s, %s, %s, %s)
     """
@@ -367,6 +367,83 @@ def insert_page(
         query,
         (container_id, page_num, page_type, ocr_text, ocr_confidence)
     )
+
+
+def batch_insert_pages(pages: List[Dict[str, Any]]) -> int:
+    """
+    Batch insert pages into pages_t.
+
+    Args:
+        pages: List of page dictionaries with fields:
+            - container_id (required)
+            - issue_id (required)
+            - page_index (required, 0-based)
+            - page_number_printed (optional)
+            - page_label (optional)
+            - page_type (required)
+            - is_cover (required, 0 or 1)
+            - is_blank (required, 0 or 1)
+            - has_ocr (required, 0 or 1)
+            - ocr_source (optional: 'ia_djvu' or 'ia_hocr')
+            - ocr_confidence (optional: 0.00-1.00)
+            - ocr_word_count (optional)
+            - ocr_char_count (optional)
+            - ocr_text (optional: MEDIUMTEXT)
+            - is_plate (optional, default: 0)
+            - is_supplement (optional, default: 0)
+            - image_dpi (optional, default: 300)
+
+    Returns:
+        Number of pages inserted
+
+    Note:
+        - is_manually_verified field should be added via migration (see migration_add_is_manually_verified_to_pages_t.sql)
+        - When available, is_manually_verified can be passed as a dictionary field with default 0
+    """
+    if not pages:
+        return 0
+
+    query = """
+        INSERT INTO pages_t
+        (container_id, issue_id, page_index, page_number_printed, page_label,
+         page_type, is_cover, is_plate, is_blank, is_supplement, has_ocr,
+         ocr_source, ocr_confidence, ocr_word_count, ocr_char_count, ocr_text, image_dpi)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+    """
+
+    with get_connection() as conn:
+        cursor = conn.cursor()
+
+        # Prepare tuples for executemany
+        values = [
+            (
+                p['container_id'],
+                p['issue_id'],
+                p['page_index'],
+                p.get('page_number_printed'),
+                p.get('page_label'),
+                p.get('page_type', 'content'),
+                p.get('is_cover', 0),
+                p.get('is_plate', 0),
+                p.get('is_blank', 0),
+                p.get('is_supplement', 0),
+                p.get('has_ocr', 0),
+                p.get('ocr_source'),
+                p.get('ocr_confidence'),
+                p.get('ocr_word_count'),
+                p.get('ocr_char_count'),
+                p.get('ocr_text'),
+                p.get('image_dpi', 300),
+            )
+            for p in pages
+        ]
+
+        cursor.executemany(query, values)
+        conn.commit()
+        row_count = cursor.rowcount
+        cursor.close()
+
+        return row_count
 
 
 # ============================================================================
@@ -496,7 +573,7 @@ def test_connection() -> bool:
 if __name__ == "__main__":
     print("Testing database connection...")
     if test_connection():
-        print("✓ Database connection successful")
+        print("[OK] Database connection successful")
     else:
-        print("✗ Database connection failed")
+        print("[FAIL] Database connection failed")
         sys.exit(1)
