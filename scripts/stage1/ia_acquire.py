@@ -561,79 +561,77 @@ def create_issue_from_parsed(
     if parsed is None:
         return None
 
-    try:
-        conn = hjb_db.get_connection()
+    # Use the context manager properly
+    with hjb_db.get_connection() as conn:
         if not conn:
             return None
 
         cursor = conn.cursor(dictionary=True)
 
-        # Build canonical_issue_key
-        canonical_key = parsed.canonical_issue_key
+        try:
+            # Build canonical_issue_key
+            canonical_key = parsed.canonical_issue_key
 
-        # Check if issue already exists
-        cursor.execute("""
-            SELECT issue_id FROM issues_t
-            WHERE canonical_issue_key = %s
-        """, (canonical_key,))
+            # Check if issue already exists
+            cursor.execute("""
+                SELECT issue_id FROM issues_t
+                WHERE canonical_issue_key = %s
+            """, (canonical_key,))
 
-        existing = cursor.fetchone()
-        if existing:
-            print(f"  [DB] Issue already exists: {canonical_key} (issue_id: {existing['issue_id']})")
+            existing = cursor.fetchone()
+            if existing:
+                print(f"  [DB] Issue already exists: {canonical_key} (issue_id: {existing['issue_id']})")
+                return existing['issue_id']
+
+            # Prepare issue data
+            issue_date_start = None
+            issue_date_end = None
+            if parsed.issue_date:
+                issue_date_start = parsed.issue_date.date() if hasattr(parsed.issue_date, 'date') else parsed.issue_date
+                # For regular issues, start and end are the same
+                # For indexes, date_end stays None
+                if not parsed.is_index:
+                    issue_date_end = issue_date_start
+
+            # Create new issue
+            sql = """
+                INSERT INTO issues_t
+                (title_id, family_id, volume_label, volume_sort, issue_label, issue_sort,
+                 issue_date_start, issue_date_end, year_published,
+                 is_book_edition, is_special_issue, is_supplement, canonical_issue_key)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """
+
+            values = (
+                title_id,
+                family_id,
+                parsed.volume_label,
+                parsed.volume_num,
+                str(parsed.issue_num) if parsed.issue_num else ("Index" if parsed.is_index else None),
+                parsed.issue_num,
+                issue_date_start,
+                issue_date_end,
+                parsed.year,
+                0,  # is_book_edition
+                0,  # is_special_issue
+                0,  # is_supplement
+                canonical_key,
+            )
+
+            cursor.execute(sql, values)
+            conn.commit()
+
+            issue_id = cursor.lastrowid
+            print(f"  [DB] Created issue: {canonical_key} (issue_id: {issue_id})")
+
+            return issue_id
+
+        except Exception as e:
+            eprint(f"  [DB ERROR] Failed to create issue: {type(e).__name__}: {e}")
+            conn.rollback()
+            return None
+        finally:
             cursor.close()
-            conn.close()
-            return existing['issue_id']
-
-        # Prepare issue data
-        issue_date_start = None
-        issue_date_end = None
-        if parsed.issue_date:
-            issue_date_start = parsed.issue_date.date() if hasattr(parsed.issue_date, 'date') else parsed.issue_date
-            # For regular issues, start and end are the same
-            # For indexes, date_end stays None
-            if not parsed.is_index:
-                issue_date_end = issue_date_start
-
-        # Create new issue
-        sql = """
-            INSERT INTO issues_t
-            (title_id, family_id, volume_label, volume_sort, issue_label, issue_sort,
-             issue_date_start, issue_date_end, year_published,
-             is_book_edition, is_special_issue, is_supplement, canonical_issue_key)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-        """
-
-        values = (
-            title_id,
-            family_id,
-            parsed.volume_label,
-            parsed.volume_num,
-            str(parsed.issue_num) if parsed.issue_num else ("Index" if parsed.is_index else None),
-            parsed.issue_num,
-            issue_date_start,
-            issue_date_end,
-            parsed.year,
-            0,  # is_book_edition
-            0,  # is_special_issue
-            0,  # is_supplement
-            canonical_key,
-        )
-
-        cursor.execute(sql, values)
-        conn.commit()
-
-        issue_id = cursor.lastrowid
-        print(f"  [DB] Created issue: {canonical_key} (issue_id: {issue_id})")
-
-        cursor.close()
-        conn.close()
-        return issue_id
-
-    except Exception as e:
-        eprint(f"  [DB ERROR] Failed to create issue: {type(e).__name__}: {e}")
-        import traceback
-        traceback.print_exc(file=sys.stderr)
-        return None
 
 
 # -----------------------------
@@ -753,19 +751,20 @@ def register_container_in_db(
 
                 # Create issue_containers_t mapping
                 if issue_id and container_id:
-                    conn = hjb_db.get_connection()
-                    if conn:
-                        cursor = conn.cursor()
-                        cursor.execute("""
-                            INSERT INTO issue_containers_t
-                            (issue_id, container_id, is_preferred, is_complete)
-                            VALUES (%s, %s, 1, 1)
-                            ON DUPLICATE KEY UPDATE is_preferred = 1
-                        """, (issue_id, container_id))
-                        conn.commit()
-                        cursor.close()
-                        conn.close()
-                        print(f"  [DB] Mapped issue {issue_id} to container {container_id}")
+                    with hjb_db.get_connection() as conn:
+                        if conn:
+                            cursor = conn.cursor()
+                            try:
+                                cursor.execute("""
+                                    INSERT INTO issue_containers_t
+                                    (issue_id, container_id, is_preferred, is_complete)
+                                    VALUES (%s, %s, 1, 1)
+                                    ON DUPLICATE KEY UPDATE is_preferred = 1
+                                """, (issue_id, container_id))
+                                conn.commit()
+                                print(f"  [DB] Mapped issue {issue_id} to container {container_id}")
+                            finally:
+                                cursor.close()
             except Exception as e:
                 # Don't fail container registration if issue creation fails
                 eprint(f"  [DB WARN] Issue creation failed (container still registered): {e}")
