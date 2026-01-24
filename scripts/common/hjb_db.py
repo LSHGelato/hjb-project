@@ -514,6 +514,13 @@ _VALID_STAGES = frozenset({
     "stage5_export",
 })
 
+# Mapping of stage names to timestamp column names in processing_status_t
+# Note: Actual schema has stage2_ocr_complete paired with stage2_completed_at (not stage2_ocr_completed_at)
+_STAGE_TIMESTAMP_COLUMNS = {
+    "stage1_ingestion": "stage1_completed_at",
+    "stage2_ocr": "stage2_completed_at",
+}
+
 
 def update_stage_completion(
     container_id: int,
@@ -536,16 +543,18 @@ def update_stage_completion(
 
     if complete:
         # Stage name is validated above, safe to use in query
+        # Use the correct timestamp column for this stage
+        timestamp_col = _STAGE_TIMESTAMP_COLUMNS.get(stage, f"{stage}_completed_at")
         query = f"""
             UPDATE processing_status_t
-            SET {stage}_complete = 1, {stage}_completed_at = NOW()
+            SET {stage}_complete = 1, {timestamp_col} = NOW()
             WHERE container_id = %s
         """
         execute_query(query, (container_id,))
     else:
         query = """
-            UPDATE processing_status_t 
-            SET last_error_stage = %s, last_error_message = %s, 
+            UPDATE processing_status_t
+            SET last_error_stage = %s, last_error_message = %s,
                 last_error_at = NOW(), retry_count = retry_count + 1
             WHERE container_id = %s
         """
