@@ -569,8 +569,18 @@ def create_issue_from_parsed(
         cursor = conn.cursor(dictionary=True)
 
         try:
-            # Build canonical_issue_key
-            canonical_key = parsed.canonical_issue_key
+            # Look up family_code for canonical key
+            family_code = None
+            cursor.execute(
+                "SELECT family_code FROM publication_families_t WHERE family_id = %s",
+                (family_id,)
+            )
+            family_result = cursor.fetchone()
+            if family_result:
+                family_code = family_result['family_code']
+
+            # Build canonical_issue_key with family code
+            canonical_key = parsed.canonical_issue_key(family_code)
 
             # Check if issue already exists
             cursor.execute("""

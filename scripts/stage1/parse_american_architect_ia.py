@@ -83,18 +83,27 @@ class ParsedIAIdentifier:
         else:
             return f"Issue {self.issue_num}"
     
-    @property
-    def canonical_issue_key(self) -> str:
-        """Key for deduplication (same issue, different scans, should have same key)"""
+    def canonical_issue_key(self, family_code: str = None) -> str:
+        """
+        Generate canonical issue key for deduplication.
+
+        Args:
+            family_code: Short family code (e.g., 'AMER_ARCH', 'BLDG_AGE')
+                         If None, uses publication name from identifier
+
+        Returns:
+            Unique key format: {FAMILY}_{TYPE}_{date/year}_{volume}_{issue}
+        """
+        # Use family_code if provided, otherwise derive from publication
+        family_prefix = family_code or self.publication_short.upper()
+
         if self.is_index:
-            # All indexes use simple format: INDEX_[year]_[padded volume]
-            # Half-year range is stored separately but NOT in canonical key
-            # (allows for future Option 2: using actual date boundaries from issues_t)
-            return f"INDEX_{self.year}_{self.volume_num:03d}"
+            # INDEX format: {FAMILY}_INDEX_{year}_{volume}
+            return f"{family_prefix}_INDEX_{self.year}_{self.volume_num:03d}"
         else:
-            # Same issue date + volume = same logical issue
+            # ISSUE format: {FAMILY}_ISSUE_{date}_{volume}_{issue}
             date_str = self.issue_date.strftime("%Y%m%d")
-            return f"ISSUE_{date_str}_{self.volume_num:03d}_{self.issue_num:04d}"
+            return f"{family_prefix}_ISSUE_{date_str}_{self.volume_num:03d}_{self.issue_num:04d}"
 
 
 def roman_to_int(roman: str) -> int:
@@ -274,7 +283,9 @@ if __name__ == "__main__":
             print(f"  Issue Num: {parsed.issue_num}")
         if parsed.half_year_range:
             print(f"  Half-Year: {parsed.half_year_range}")
-        print(f"  Canonical Key: {parsed.canonical_issue_key}")
+        # Show both with and without family code
+        print(f"  Canonical Key (no family): {parsed.canonical_issue_key()}")
+        print(f"  Canonical Key (AMER_ARCH): {parsed.canonical_issue_key('AMER_ARCH')}")
         if parsed.warnings:
             print(f"  ⚠️  Warnings: {', '.join(parsed.warnings)}")
         print()
