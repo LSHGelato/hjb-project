@@ -750,6 +750,22 @@ def register_container_in_db(
 
         print(f"  [DB] Registered container: container_id={container_id}")
 
+        # Create processing_status_t entry
+        try:
+            hjb_db.insert_processing_status(container_id)
+            print(f"  [DB] Created processing_status entry for container {container_id}")
+
+            # Mark Stage 1 complete
+            hjb_db.update_stage_completion(
+                container_id=container_id,
+                stage="stage1_ingestion",
+                complete=True
+            )
+            print(f"  [DB] Marked stage1_ingestion_complete")
+        except Exception as e:
+            # Don't fail registration if status creation fails
+            eprint(f"  [DB WARN] Failed to create processing_status: {e}")
+
         # Create issue from parsed identifier if available
         if parsed is not None:
             try:
